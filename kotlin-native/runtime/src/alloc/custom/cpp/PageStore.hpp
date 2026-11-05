@@ -64,7 +64,10 @@ public:
                     [&]() { --concurrentSweepersCount_; }
             );
 
-            if ((page = unswept_.Pop())) {
+            // Kore: with a generational GC, sweeping right after a young collection covers all the pages allocated
+            // since the previous one. A mutator that helped with it would stall for milliseconds, so it takes an empty
+            // or new page instead and leaves sweeping to the GC thread, which keeps refilling `ready_`.
+            if (!generational_.load(std::memory_order_relaxed) && (page = unswept_.Pop())) {
                 // If there're unswept_ pages, the GC is in progress.
                 auto sweepHandle = SweepTraits::currentGCSweepScope(*handle);
                 if ((page = SweepSingle(sweepHandle, page, unswept_, used_, finalizerQueue))) {
