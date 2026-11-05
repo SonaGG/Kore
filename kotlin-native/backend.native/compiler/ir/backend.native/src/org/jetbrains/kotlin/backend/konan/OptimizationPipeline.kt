@@ -342,7 +342,16 @@ class MandatoryOptimizationPipeline(config: LlvmPipelineConfig, performanceManag
     }
 }
 
-class ModuleOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
+/**
+ * @param preLink Kore: the module is optimized again by [LTOOptimizationPipeline] afterwards, so run LLVM's LTO pre-link
+ * pipeline, which leaves the late optimizations (vectorization, unrolling, ...) to the LTO pipeline instead of running them twice.
+ */
+class ModuleOptimizationPipeline(
+        config: LlvmPipelineConfig,
+        performanceManager: PerformanceManager?,
+        logger: LoggingContext? = null,
+        preLink: Boolean = false,
+) :
         LlvmOptimizationPipeline(config, performanceManager, logger) {
     override val pipelineName = "llvm-default"
     override val passes = config.modulePasses?.let { listOf(it) } ?: buildList {
@@ -353,7 +362,7 @@ class ModuleOptimizationPipeline(config: LlvmPipelineConfig, performanceManager:
             add("internalize")
             if (config.globalDce) add("globaldce")
         }
-        add("default<$optimizationFlag>")
+        add(if (preLink) "lto-pre-link<$optimizationFlag>" else "default<$optimizationFlag>")
     }
 }
 

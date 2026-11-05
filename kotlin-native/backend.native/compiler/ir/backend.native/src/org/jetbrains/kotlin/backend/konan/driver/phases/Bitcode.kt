@@ -90,7 +90,8 @@ internal val MandatoryBitcodeLLVMPostprocessingPhase = optimizationPipelinePass(
 
 internal val ModuleBitcodeOptimizationPhase = optimizationPipelinePass(
         name = "ModuleBitcodeOptimization",
-        pipeline = ::ModuleOptimizationPipeline,
+        // Kore: the LTO pipeline runs right after on the same module, so prepare for it instead of running the full pipeline twice.
+        pipeline = { config, performanceManager, logger -> ModuleOptimizationPipeline(config, performanceManager, logger, preLink = true) },
 )
 
 internal val LTOBitcodeOptimizationPhase = optimizationPipelinePass(
