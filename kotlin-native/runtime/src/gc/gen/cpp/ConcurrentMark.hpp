@@ -55,6 +55,8 @@ public:
     class MarkTraits {
     public:
         NO_INLINE static void reportUnconstructed(ObjHeader* object) noexcept;
+        NO_INLINE static void checkEnqueue(ObjHeader* object) noexcept;
+        static bool checking() noexcept;
         using MarkQueue = ParallelProcessor::Worker;
         using AnyQueue = ParallelProcessor::WorkSource;
 

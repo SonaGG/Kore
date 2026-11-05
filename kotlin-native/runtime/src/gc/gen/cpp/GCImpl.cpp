@@ -483,8 +483,8 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
     collectRememberedSets(rememberedSet);
     mark_.markYoungInSTW(gcHandle, [&](mark::ConcurrentMark::ParallelProcessor::Worker& worker) {
         markRememberedSet(worker, rememberedSet);
-        // Conservatively found references are roots too.
-        for (ObjHeader* object : stackReferenced) MarkTraits::tryEnqueue(worker, object);
+        // Conservatively found references only pin: liveness comes from the precise roots, as in full collections (a
+        // live reference is always in a frame slot; other stack words may be stale).
     });
 
     if (nursery) {
@@ -607,14 +607,15 @@ NO_INLINE void checkFieldsInMark(ObjHeader* holder) noexcept {
     size_t index = 0;
     traverseObjectFields(holder, [&](auto accessor) noexcept {
         ObjHeader* value = accessor.direct();
-        if (value != nullptr && value->heap() && reinterpret_cast<uintptr_t>(value->typeInfoOrMeta_) == 0) {
+        bool deadRetained = value != nullptr && alloc::nursery::inRetainedBlock(value) && alloc::objectDataForObject(value).word() == 0;
+        if (value != nullptr && value->heap() && (reinterpret_cast<uintptr_t>(value->typeInfoOrMeta_) == 0 || deadRetained)) {
             uintptr_t word = holder->heap() ? alloc::objectDataForObject(holder).word() : 0;
             konan::consoleErrorf(
                     "kore-gc-check: %p (type %p size %d refs %d meta %d, word %p, nursery %d, retained %d) field #%zu -> %p "
-                    "without type info (young %d, nursery %d, retained %d, free %d)\n",
+                    "without type info or dead (dead retained %d, young %d, nursery %d, retained %d, free %d)\n",
                     holder, holder->type_info(), holder->type_info()->instanceSize_, holder->type_info()->objOffsetsCount_,
                     holder->has_meta_object(), reinterpret_cast<void*>(word), alloc::nursery::movable(holder),
-                    alloc::nursery::inRetainedBlock(holder), index, value, gc::internal::isYoungCollection(),
+                    alloc::nursery::inRetainedBlock(holder), index, value, deadRetained, gc::internal::isYoungCollection(),
                     alloc::nursery::movable(value), alloc::nursery::inRetainedBlock(value), alloc::nursery::inFreeBlock(value));
             std::abort();
         }
@@ -774,4 +775,17 @@ void gc::mark::ConcurrentMark::MarkTraits::reportUnconstructed(ObjHeader* object
             internal::isYoungCollection(), alloc::nursery::movable(object), alloc::nursery::inRetainedBlock(object),
             alloc::nursery::inFreeBlock(object));
     std::abort();
+}
+
+bool gc::mark::ConcurrentMark::MarkTraits::checking() noexcept {
+    static const bool check = std::getenv("KORE_GC_CHECK") != nullptr;
+    return check;
+}
+
+void gc::mark::ConcurrentMark::MarkTraits::checkEnqueue(ObjHeader* object) noexcept {
+    if (alloc::nursery::inRetainedBlock(object) && alloc::objectDataForObject(object).word() == 0) {
+        konan::consoleErrorf("kore-gc-check: enqueueing dead object %p of a retained block (young %d)\n", object,
+                             internal::isYoungCollection());
+        std::abort();
+    }
 }
