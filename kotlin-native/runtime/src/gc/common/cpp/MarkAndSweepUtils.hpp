@@ -6,6 +6,8 @@
 #ifndef RUNTIME_GC_COMMON_MARK_AND_SWEEP_UTILS_H
 #define RUNTIME_GC_COMMON_MARK_AND_SWEEP_UTILS_H
 
+#include "Allocator.hpp"
+#include "CompilerConstants.hpp"
 #include "ExtraObjectData.hpp"
 #include "FinalizerHooks.hpp"
 #include "GlobalData.hpp"
@@ -110,6 +112,35 @@ void Mark(GCHandle::GCMarkScope& markHandle, typename Traits::MarkQueue& markQue
     }
 }
 
+// Kore: without shadow stack frames, the stack roots of a thread (suspended or native) are the heap objects that any
+// word of its stack, or of the registers it saved when it stopped, points into.
+template <typename Traits>
+void collectConservativeStackRoots(typename Traits::MarkQueue& markQueue, mm::ThreadData& thread) noexcept {
+    auto& suspension = thread.suspensionData();
+    std::vector<ObjHeader**> candidates;
+    auto consider = [&](uintptr_t word) {
+        if (word >= 4096) candidates.push_back(reinterpret_cast<ObjHeader**>(word));
+    };
+    uintptr_t high = suspension.stackBase();
+    for (uintptr_t address = suspension.savedStackPointer() & ~uintptr_t(7); address + sizeof(uintptr_t) <= high;
+         address += sizeof(uintptr_t)) {
+        consider(*reinterpret_cast<const uintptr_t*>(address));
+    }
+    for (size_t i = 0; i < mm::ThreadSuspensionData::kSavedRegisters; ++i) consider(suspension.savedRegisters()[i]);
+    for (ObjHeader** candidate : candidates) {
+        auto address = reinterpret_cast<uintptr_t>(candidate);
+        ObjHeader* object = alloc::nursery::movableObjectContaining(address);
+        if (object == nullptr) object = alloc::nursery::retainedObjectContaining(address);
+        if (object != nullptr) {
+            if (alloc::nursery::movable(object)) alloc::nursery::pin(object);
+            internal::collectRoot<Traits>(markQueue, object);
+        }
+    }
+    mm::GlobalData::Instance().allocator().forEachHeapSlot(candidates, [&](ObjHeader**, ObjHeader* object) noexcept {
+        internal::collectRoot<Traits>(markQueue, object);
+    });
+}
+
 template <typename Traits>
 void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& markQueue, mm::ThreadData& thread) {
     auto handle = gcHandle.collectThreadRoots(thread);
@@ -126,6 +157,7 @@ void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& mark
             }
         }
     }
+    if (compiler::conservativeStacks()) collectConservativeStackRoots<Traits>(markQueue, thread);
 }
 
 template <typename Traits>

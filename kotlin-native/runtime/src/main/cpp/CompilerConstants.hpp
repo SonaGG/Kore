@@ -31,6 +31,7 @@ extern "C" const int32_t Kotlin_gcMarkSingleThreaded;
 extern "C" const int32_t Kotlin_fixedBlockPageSize;
 extern "C" const int32_t Kotlin_gcYoungGenerationSize; // Kore
 extern "C" const int32_t Kotlin_gcNurserySize; // Kore
+extern "C" const int32_t Kotlin_conservativeStacks; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
 class SourceInfo;
@@ -86,6 +87,11 @@ ALWAYS_INLINE inline constexpr int32_t fixedBlockPageSize() noexcept {
 // Kore: young generation size in MiB for the generational GC; 0 selects the runtime default.
 ALWAYS_INLINE inline int32_t gcYoungGenerationSize() noexcept {
     return Kotlin_gcYoungGenerationSize;
+}
+
+// Kore: generated code keeps no shadow stack frames; stacks are scanned conservatively.
+ALWAYS_INLINE inline bool conservativeStacks() noexcept {
+    return Kotlin_conservativeStacks != 0;
 }
 
 // Kore: size of the moving young generation in MiB; 0 if there is none.

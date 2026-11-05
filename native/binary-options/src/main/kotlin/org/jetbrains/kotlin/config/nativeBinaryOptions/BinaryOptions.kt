@@ -62,6 +62,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: size in MiB of the moving young generation (nursery); 0 disables it.
     val gcNurserySize by uintOption()
 
+    // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
+    val conservativeStacks by booleanOption()
+
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 

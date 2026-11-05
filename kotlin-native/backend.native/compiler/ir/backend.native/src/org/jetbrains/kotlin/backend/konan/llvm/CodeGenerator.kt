@@ -626,6 +626,9 @@ internal abstract class FunctionGenerationContext(
 
     private var setCurrentFrameIsCalled: Boolean = false
 
+    // Kore: no shadow stack frames: the GC scans the stacks conservatively.
+    private val conservativeStacks: Boolean get() = context.config.conservativeStacks
+
     val stackLocalsManager = StackLocalsManagerImpl(this, stackLocalsInitBb)
 
     private var cleanupLangdingpadIsUsed = false
@@ -668,6 +671,13 @@ internal abstract class FunctionGenerationContext(
     }
 
     fun alloca(type: LLVMTypeRef?, isObjectType: Boolean, name: String = "", variableLocation: VariableDebugLocation? = null): LLVMValueRef {
+        // Kore: with conservative stack scanning the GC finds references wherever they are, so object variables are
+        // ordinary (promotable) allocas instead of frame slots. They start null, like zeroed frame slots.
+        if (isObjectType && conservativeStacks) {
+            val slotAddress = alloca(type, isObjectType = false, name, variableLocation)
+            appendingTo(prologueBb) { LLVMBuildStore(builder, llvm.kNull, slotAddress) }
+            return slotAddress
+        }
         if (isObjectType) {
             appendingTo(localsInitBb) {
                 val slotAddress = gep(type!!, slotsPhi!!, llvm.int32(slotCount), name)
@@ -768,7 +778,7 @@ internal abstract class FunctionGenerationContext(
         require(alignment == null || alignment % runtime.pointerAlignment == 0)
         if (onStack) {
             require(!isVolatile) { "Stack ref update can't be volatile"}
-            call(llvm.updateStackRefFunction, listOf(address, value))
+            if (conservativeStacks) store(value, address) else call(llvm.updateStackRefFunction, listOf(address, value))
         } else {
             if (isVolatile) {
                 call(llvm.UpdateVolatileHeapRef, listOf(address, value))
@@ -1041,7 +1051,7 @@ internal abstract class FunctionGenerationContext(
         if (switchThreadState) {
             switchThreadState(Runnable)
         }
-        call(llvm.setCurrentFrameFunction, listOf(slotsPhi!!))
+        if (!conservativeStacks) call(llvm.setCurrentFrameFunction, listOf(slotsPhi!!))
         setCurrentFrameIsCalled = true
 
         return landingpad
@@ -1191,7 +1201,7 @@ internal abstract class FunctionGenerationContext(
     }
 
     fun generateFrameCheck() {
-        if (!context.shouldOptimize())
+        if (!context.shouldOptimize() && !conservativeStacks)
             call(llvm.checkCurrentFrameFunction, listOf(slotsPhi!!))
     }
 
@@ -1419,10 +1429,10 @@ internal abstract class FunctionGenerationContext(
             if (switchToRunnable) {
                 switchThreadState(Runnable)
             }
-            if (needSlots || needCleanupLandingpadAndLeaveFrame) {
+            if ((needSlots || needCleanupLandingpadAndLeaveFrame) && !conservativeStacks) {
                 call(llvm.enterFrameFunction, listOf(slotsPhi!!, llvm.int32(vars.skipSlots), llvm.int32(slotCount)))
             } else {
-                check(!setCurrentFrameIsCalled)
+                check(conservativeStacks || !setCurrentFrameIsCalled)
             }
             if (!forbidRuntime && needSafePoint) {
                 call(llvm.Kotlin_mm_safePointFunctionPrologue, emptyList())
@@ -1599,7 +1609,7 @@ internal abstract class FunctionGenerationContext(
         }
 
     private fun releaseVars() {
-        if (needCleanupLandingpadAndLeaveFrame || needSlots) {
+        if ((needCleanupLandingpadAndLeaveFrame || needSlots) && !conservativeStacks) {
             check(!forbidRuntime) { "Attempt to leave a frame where runtime usage is forbidden" }
             call(llvm.leaveFrameFunction,
                     listOf(slotsPhi!!, llvm.int32(vars.skipSlots), llvm.int32(slotCount)))

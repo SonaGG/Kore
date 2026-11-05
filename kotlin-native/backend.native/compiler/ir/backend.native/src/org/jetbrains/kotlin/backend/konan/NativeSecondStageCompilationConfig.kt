@@ -246,6 +246,10 @@ class NativeSecondStageCompilationConfig(
     val gcNurserySize: UInt
         get() = if (gc == GC.GENERATIONAL_MARK_AND_SWEEP) configuration.get(BinaryOptions.gcNurserySize) ?: 0u else 0u
 
+    // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively.
+    val conservativeStacks: Boolean
+        get() = configuration.get(BinaryOptions.conservativeStacks) ?: false
+
     // Kore: 0 means automatic.
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u

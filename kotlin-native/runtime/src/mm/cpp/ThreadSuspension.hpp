@@ -9,6 +9,7 @@
 #include <atomic>
 
 #include "Memory.h"
+#include "CompilerConstants.hpp"
 #include "Utils.hpp"
 
 namespace kotlin {
@@ -52,6 +53,18 @@ public:
     uintptr_t stackBase() const noexcept { return stackBase_; }
     uintptr_t savedStackPointer() const noexcept { return savedStackPointer_.load(std::memory_order_relaxed); }
     ALWAYS_INLINE void saveStackPointer() noexcept { savedStackPointer_.store(currentStackPointer(), std::memory_order_relaxed); }
+    // Callee-saved registers when the thread last left the runnable state: they may hold references (without a shadow
+    // stack, or in values the compiled code keeps in registers) across the native code that follows.
+    static constexpr size_t kSavedRegisters = 10;
+    const uintptr_t* savedRegisters() const noexcept { return savedRegisters_; }
+    NO_INLINE void captureRegistersAndStackPointer() noexcept;
+    ALWAYS_INLINE void saveStateForStackScanning() noexcept {
+        if (compiler::conservativeStacks() || compiler::gcNurserySize() > 0) {
+            captureRegistersAndStackPointer();
+        } else {
+            saveStackPointer();
+        }
+    }
 
     ALWAYS_INLINE static uintptr_t currentStackPointer() noexcept {
 #if defined(__x86_64__)
@@ -74,7 +87,7 @@ public:
 
     ThreadState setState(ThreadState newState) noexcept;
     ThreadState setStateNoSafePoint(ThreadState newState) noexcept {
-        if (newState == ThreadState::kNative) saveStackPointer();
+        if (newState == ThreadState::kNative) saveStateForStackScanning();
         return state_.exchange(newState, std::memory_order_acq_rel);
     }
 
@@ -100,6 +113,7 @@ private:
     mm::ThreadData& threadData_;
     const uintptr_t stackBase_;
     std::atomic<uintptr_t> savedStackPointer_;
+    uintptr_t savedRegisters_[kSavedRegisters] = {};
 };
 
 /**

@@ -309,6 +309,13 @@ void gc::internal::GenerationalGC::pinNurseryRoots(std::vector<ObjHeader*>& stac
                 stackReferenced.push_back(object);
             }
         }
+        for (size_t i = 0; i < mm::ThreadSuspensionData::kSavedRegisters; ++i) {
+            ObjHeader* object = alloc::nursery::movableObjectContaining(suspension.savedRegisters()[i]);
+            if (object != nullptr && !alloc::nursery::pinned(object)) {
+                alloc::nursery::pin(object);
+                stackReferenced.push_back(object);
+            }
+        }
         for (auto value : mm::ThreadRootSet(thread)) pinIfMovable(value.object);
     }
     for (auto value : mm::GlobalRootSet()) pinIfMovable(value.object);

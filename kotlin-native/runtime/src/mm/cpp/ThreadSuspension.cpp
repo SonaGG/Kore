@@ -56,7 +56,7 @@ PERFORMANCE_INLINE void mm::ThreadSuspensionData::MutatorPauseHandle::resume() n
 
 kotlin::ThreadState kotlin::mm::ThreadSuspensionData::setState(kotlin::ThreadState newState) noexcept {
     // Kore: the stack the GC scans while this thread is not runnable (see `saveStackPointer`).
-    if (newState == ThreadState::kNative) saveStackPointer();
+    if (newState == ThreadState::kNative) saveStateForStackScanning();
     if (processBarrierAvailable()) {
         // Kore: only this thread writes its state. See `processBarrierAvailable`; the GC issues `processWideBarrier`
         // before it reads the state, after requesting a suspension or a safe point action.
@@ -183,4 +183,31 @@ uintptr_t kotlin::mm::ThreadSuspensionData::currentThreadStackBase() noexcept {
 #else
     return 0; // Unknown: no conservative stack scanning.
 #endif
+}
+
+// Kore: a call, so that the registers hold the caller's values (those live across the call are in callee-saved
+// registers or in memory). The asm only uses a caller-saved register.
+NO_INLINE void kotlin::mm::ThreadSuspensionData::captureRegistersAndStackPointer() noexcept {
+#if defined(__x86_64__)
+    asm volatile(
+            "movq %%rbx, 0(%0)\n\t"
+            "movq %%rbp, 8(%0)\n\t"
+            "movq %%rdi, 16(%0)\n\t"
+            "movq %%rsi, 24(%0)\n\t"
+            "movq %%r12, 32(%0)\n\t"
+            "movq %%r13, 40(%0)\n\t"
+            "movq %%r14, 48(%0)\n\t"
+            "movq %%r15, 56(%0)\n\t" ::"a"(savedRegisters_)
+            : "memory");
+#elif defined(__aarch64__)
+    register uintptr_t* registers asm("x9") = savedRegisters_;
+    asm volatile(
+            "stp x19, x20, [%0, #0]\n\t"
+            "stp x21, x22, [%0, #16]\n\t"
+            "stp x23, x24, [%0, #32]\n\t"
+            "stp x25, x26, [%0, #48]\n\t"
+            "stp x27, x28, [%0, #64]\n\t" ::"r"(registers)
+            : "memory");
+#endif
+    saveStackPointer();
 }
