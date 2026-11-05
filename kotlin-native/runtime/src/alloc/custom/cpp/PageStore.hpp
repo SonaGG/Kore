@@ -32,11 +32,12 @@ public:
     // Kore: young-generation collection (generational GC with sticky marks). Pages in `ready_` were swept by the
     // previous collection and have not been allocated into since, so they hold only objects that survived it, i.e.
     // old objects. Only pages handed out since the previous collection (`used_`) can hold young objects.
+    // Empty pages are kept (unlike in PrepareForGC): the sweep left them zeroed and ready, and the young generation is
+    // about to be allocated again; destroying them would turn into allocating and zeroing fresh memory. Full
+    // collections still return empty pages to the system.
     void PrepareForYoungGC() noexcept {
         generational_.store(true, std::memory_order_relaxed);
         unswept_.TransferAllFrom(std::move(used_));
-        T* page;
-        while ((page = empty_.Pop())) page->Destroy();
     }
 
     void Sweep(GCSweepScope& sweepHandle, FinalizerQueue& finalizerQueue) noexcept {
