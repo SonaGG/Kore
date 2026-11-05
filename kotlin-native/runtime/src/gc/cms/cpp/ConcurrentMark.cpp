@@ -4,6 +4,7 @@
  */
 
 #include "ConcurrentMark.hpp"
+#include "ProcessBarrier.hpp"
 
 #include "MarkAndSweepUtils.hpp"
 #include "GCStatistics.hpp"
@@ -174,6 +175,8 @@ void gc::mark::ConcurrentMark::flushMutatorQueues() noexcept {
 
     {
         FlushActionActivator flushActivator{};
+        // Kore: see `mm::processBarrierAvailable`.
+        mm::processWideBarrier();
 
         // wait all mutators flushed
         while (true) {

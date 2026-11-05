@@ -11,6 +11,7 @@
 #include "CallsChecker.hpp"
 #include "Logging.hpp"
 #include "Porting.h"
+#include "ProcessBarrier.hpp"
 #include "SafePoint.hpp"
 
 using namespace kotlin;
@@ -48,6 +49,17 @@ PERFORMANCE_INLINE void mm::ThreadSuspensionData::MutatorPauseHandle::resume() n
 }
 
 kotlin::ThreadState kotlin::mm::ThreadSuspensionData::setState(kotlin::ThreadState newState) noexcept {
+    if (processBarrierAvailable()) {
+        // Kore: only this thread writes its state. See `processBarrierAvailable`; the GC issues `processWideBarrier`
+        // before it reads the state, after requesting a suspension or a safe point action.
+        ThreadState oldState = state_.load(std::memory_order_relaxed);
+        state_.store(newState, std::memory_order_release);
+        if (oldState == ThreadState::kNative && newState == ThreadState::kRunnable) {
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+            safePoint(threadData_, std::memory_order_acquire);
+        }
+        return oldState;
+    }
     ThreadState oldState = state_.exchange(newState);
     if (oldState == ThreadState::kNative && newState == ThreadState::kRunnable) {
         // Must use already acquired `ThreadData` because TLS may be in invalid state e.g. during thread detach.
@@ -121,6 +133,8 @@ bool kotlin::mm::TryRequestThreadsSuspension(internal::SuspensionReason reason) 
 }
 
 void kotlin::mm::WaitForThreadsSuspension() noexcept {
+    // Kore: see `processBarrierAvailable`.
+    processWideBarrier();
     auto& threadRegistry = kotlin::mm::ThreadRegistry::Instance();
     auto* currentThread = (threadRegistry.IsCurrentThreadRegistered()) ? threadRegistry.CurrentThreadData() : nullptr;
     // Spin waiting for threads to suspend. Ignore Native threads.
