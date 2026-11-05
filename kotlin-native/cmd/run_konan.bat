@@ -105,7 +105,9 @@ rem Needs to be executed in the EnableDelayedExpansion mode.
     set _java_major_version=1
   ) else (
     rem Strip the leading quote.
-    set _java_major_version=!_version:~1!
+    rem Kore: remove all quotes rather than only the leading one. GA JDKs without a dotted version (e.g. "25", "27")
+    rem otherwise leave a trailing quote (27") that breaks the "if ... geq 24" checks below.
+    set _java_major_version=!_version:"=!
   )
 goto :eof
 
