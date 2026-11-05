@@ -13,8 +13,10 @@ import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.backend.konan.lower.originalConstructor
+import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.types.classOrNull
 import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.util.*
 
@@ -235,5 +237,24 @@ private fun inferFunctionAttributes(contextUtils: ContextUtils, irFunction: IrSi
             }
             if (mustNotInline(contextUtils.context, irFunction)) {
                 add(LlvmFunctionAttribute.NoInline)
+            } else if (isStdlibIteratorStep(irFunction)) {
+                add(LlvmFunctionAttribute.AlwaysInline)
             }
         }
+
+// Kore: the `hasNext`/`next` implementations of the standard library's iterators are the steps of every `for` loop over
+// a collection. Inlining them into the loops lets LLVM keep the iteration state in registers and fold the receiver's
+// type checks, as a JIT inlines a hot loop's iterator; the default inlining threshold leaves the larger ones as calls.
+private fun isStdlibIteratorStep(irFunction: IrSimpleFunction): Boolean {
+    val name = irFunction.name.asString()
+    if (name != "next" && name != "hasNext") return false
+    if (irFunction.parameters.size != 1 || irFunction.isFakeOverride) return false
+    val packageName = irFunction.getPackageFragment().packageFqName.asString()
+    if (packageName != "kotlin" && !packageName.startsWith("kotlin.")) return false
+    return irFunction.parentClassOrNull?.isIterator() == true
+}
+
+private fun IrClass.isIterator(): Boolean = superTypes.any { superType ->
+    val superClass = superType.classOrNull?.owner ?: return@any false
+    superClass.fqNameWhenAvailable?.asString() == "kotlin.collections.Iterator" || superClass.isIterator()
+}
