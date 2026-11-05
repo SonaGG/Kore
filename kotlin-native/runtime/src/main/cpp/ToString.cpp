@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "DecimalFormat.hpp"
 #include <cstdio>
 #include <limits.h>
 #include <string.h>
@@ -70,8 +71,8 @@ template <typename T> OBJ_GETTER(Kotlin_toStringRadix, T value, KInt radix) {
 extern "C" {
 
 OBJ_GETTER(Kotlin_Byte_toString, KByte value) {
-  char cstring[8];
-  std::snprintf(cstring, sizeof(cstring), "%d", value);
+  char cstring[21];
+  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
   RETURN_RESULT_OF(CreateStringFromCString, cstring);
 }
 
@@ -80,14 +81,14 @@ OBJ_GETTER(Kotlin_Char_toString, KChar value) {
 }
 
 OBJ_GETTER(Kotlin_Short_toString, KShort value) {
-  char cstring[8];
-  std::snprintf(cstring, sizeof(cstring), "%d", value);
+  char cstring[21];
+  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
   RETURN_RESULT_OF(CreateStringFromCString, cstring);
 }
 
 OBJ_GETTER(Kotlin_Int_toString, KInt value) {
-  char cstring[16];
-  std::snprintf(cstring, sizeof(cstring), "%d", value);
+  char cstring[21];
+  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
   RETURN_RESULT_OF(CreateStringFromCString, cstring);
 }
 
@@ -96,8 +97,8 @@ OBJ_GETTER(Kotlin_Int_toStringRadix, KInt value, KInt radix) {
 }
 
 OBJ_GETTER(Kotlin_Long_toString, KLong value) {
-  char cstring[32];
-  std::snprintf(cstring, sizeof(cstring), "%lld", static_cast<long long>(value));
+  char cstring[21];
+  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
   RETURN_RESULT_OF(CreateStringFromCString, cstring);
 }
 

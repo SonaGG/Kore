@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "DecimalFormat.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -396,10 +397,8 @@ extern "C" KInt Kotlin_StringBuilder_insertString(KRef builder, KInt distIndex, 
 extern "C" KInt Kotlin_StringBuilder_insertInt(KRef builder, KInt position, KInt value) {
     auto toArray = builder->array();
     RuntimeAssert(toArray->count_ >= static_cast<uint32_t>(11 + position), "must be true");
-    char cstring[12];
-    auto length = std::snprintf(cstring, sizeof(cstring), "%d", value);
-    RuntimeAssert(length >= 0, "This should never happen"); // may be overkill
-    RuntimeAssert(static_cast<size_t>(length) < sizeof(cstring), "Unexpectedly large value"); // Can't be, but this is what sNprintf for
+    char cstring[21];
+    kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
     auto* from = &cstring[0];
     auto* to = CharArrayAddressOfElementAt(toArray, position);
     while (*from) {
