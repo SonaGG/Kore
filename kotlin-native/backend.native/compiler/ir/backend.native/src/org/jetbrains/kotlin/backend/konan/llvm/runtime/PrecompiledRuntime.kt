@@ -11,6 +11,7 @@ import kotlinx.cinterop.readBytes
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.BitcodeCompiler
 import org.jetbrains.kotlin.backend.konan.LTOOptimizationPipeline
+import org.jetbrains.kotlin.backend.konan.LlvmPipelineConfig
 import org.jetbrains.kotlin.backend.konan.MandatoryOptimizationPipeline
 import org.jetbrains.kotlin.backend.konan.ModuleOptimizationPipeline
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
@@ -23,11 +24,15 @@ import org.jetbrains.kotlin.konan.config.overrideClangOptions
 import org.jetbrains.kotlin.konan.target.ClangFlags
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import java.io.File
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Kore: the runtime of an optimized program, split by [linkPrecompiledRuntime].
@@ -127,6 +132,41 @@ private fun precompiledRuntimeObject(generationState: NativeGenerationState, run
     if (objectFile.isFile) return objectFile
 
     cacheDirectory.mkdirs()
+    // Compilations in this and other processes (parallel Gradle tasks, daemons) wait for one of them to produce the
+    // object rather than racing to replace a file another linker may have open.
+    synchronized(cacheLocks.computeIfAbsent(objectFile.path) { Any() }) {
+        FileChannel.open(cacheDirectory.resolve("$hash.lock").toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
+            channel.lockWaitingForOtherClassLoaders().use {
+                if (!objectFile.isFile) {
+                    compileRuntimeObject(generationState, runtimeModule, pipelineConfig, cacheDirectory, objectFile)
+                }
+            }
+        }
+    }
+    return objectFile
+}
+
+private val cacheLocks = ConcurrentHashMap<String, Any>()
+
+// Compilers loaded by other class loaders of this JVM (e.g. a Gradle daemon) do not share [cacheLocks], and the JVM refuses
+// overlapping file locks of the same process instead of blocking.
+private fun FileChannel.lockWaitingForOtherClassLoaders(): FileLock {
+    while (true) {
+        try {
+            return lock()
+        } catch (_: OverlappingFileLockException) {
+            Thread.sleep(20)
+        }
+    }
+}
+
+private fun compileRuntimeObject(
+        generationState: NativeGenerationState,
+        runtimeModule: LLVMModuleRef,
+        pipelineConfig: LlvmPipelineConfig,
+        cacheDirectory: File,
+        objectFile: File,
+) {
     val bitcodeFile = File.createTempFile("runtime-", ".bc", cacheDirectory)
     val temporaryObjectFile = File.createTempFile("runtime-", ".o", cacheDirectory)
     try {
@@ -142,18 +182,16 @@ private fun precompiledRuntimeObject(generationState: NativeGenerationState, run
         }
         LLVMWriteBitcodeToFile(runtimeModule, bitcodeFile.path)
         BitcodeCompiler(generationState).makeObjectFile(bitcodeFile, temporaryObjectFile)
+        // Atomically, so that compilations checking for the object without the lock never see a partial one.
         try {
             Files.move(temporaryObjectFile.toPath(), objectFile.toPath(), StandardCopyOption.ATOMIC_MOVE)
         } catch (_: AtomicMoveNotSupportedException) {
             Files.move(temporaryObjectFile.toPath(), objectFile.toPath())
-        } catch (_: FileAlreadyExistsException) {
-            // Another compilation has produced the same object concurrently.
         }
     } finally {
         bitcodeFile.delete()
         temporaryObjectFile.delete()
     }
-    return objectFile
 }
 
 private val overridableLinkages = setOf(
@@ -168,4 +206,4 @@ private const val CALLEE_INSTRUCTION_LIMIT = 160
 private const val CALLEE_DEPTH = 3
 
 // Change when the way the runtime object is produced changes.
-private const val CACHE_FORMAT = "kore-runtime-2"
+private const val CACHE_FORMAT = "kore-runtime-3"
