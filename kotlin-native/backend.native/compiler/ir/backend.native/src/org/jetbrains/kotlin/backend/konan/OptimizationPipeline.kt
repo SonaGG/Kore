@@ -345,7 +345,16 @@ class MandatoryOptimizationPipeline(config: LlvmPipelineConfig, performanceManag
 class ModuleOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
         LlvmOptimizationPipeline(config, performanceManager, logger) {
     override val pipelineName = "llvm-default"
-    override val passes = listOf(config.modulePasses ?: "default<$optimizationFlag>")
+    override val passes = config.modulePasses?.let { listOf(it) } ?: buildList {
+        // Kore: in a closed world, drop dead code before the expensive module pipeline instead of after it (in the LTO
+        // pipeline): the module pipeline then optimizes only reachable code, and internal linkage lets it inline and
+        // specialize more. The LTO pipeline internalizes the same module anyway.
+        if (config.internalize) {
+            add("internalize")
+            if (config.globalDce) add("globaldce")
+        }
+        add("default<$optimizationFlag>")
+    }
 }
 
 class LTOOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
