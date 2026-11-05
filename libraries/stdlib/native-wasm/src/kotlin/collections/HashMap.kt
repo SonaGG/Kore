@@ -91,6 +91,10 @@ public actual class HashMap<K, V> private constructor(
 ) : MutableMap<K, V> {
     private var hashShift: Int = computeShift(hashSize)
 
+    // Kore: the hash code of the key at each index, compared before the keys themselves (as JVM and other hash tables
+    // do): a probe of another key then does not touch that key, and rehashing does not call hashCode again.
+    private var keyHashes: IntArray = IntArray(keysArray.size)
+
     /**
      * The number of times this map is structurally modified.
      *
@@ -318,6 +322,7 @@ public actual class HashMap<K, V> private constructor(
             keysArray = keysArray.copyOfUninitializedElements(newSize)
             valuesArray = valuesArray?.copyOfUninitializedElements(newSize)
             presenceArray = presenceArray.copyOf(newSize)
+            keyHashes = keyHashes.copyOf(newSize)
             val newHashSize = computeHashSize(newSize)
             if (newHashSize > hashSize) rehash(newHashSize)
         }
@@ -332,7 +337,8 @@ public actual class HashMap<K, V> private constructor(
     }
 
     // Null-check for escaping extra boxing for non-nullable keys.
-    private fun hash(key: K) = if (key == null) 0 else (key.hashCode() * MAGIC) ushr hashShift
+    private fun hashCodeOf(key: K): Int = if (key == null) 0 else key.hashCode()
+    private fun slotOf(hashCode: Int): Int = (hashCode * MAGIC) ushr hashShift
 
     private fun compact(updateHashArray: Boolean) {
         var i = 0
@@ -342,6 +348,7 @@ public actual class HashMap<K, V> private constructor(
             val hash = presenceArray[i]
             if (hash >= 0) {
                 keysArray[j] = keysArray[i]
+                keyHashes[j] = keyHashes[i]
                 if (valuesArray != null) valuesArray[j] = valuesArray[i]
                 if (updateHashArray) {
                     presenceArray[j] = hash
@@ -376,7 +383,7 @@ public actual class HashMap<K, V> private constructor(
     }
 
     private fun putRehash(i: Int): Boolean {
-        var hash = hash(keysArray[i])
+        var hash = slotOf(keyHashes[i])
         var probesLeft = maxProbeDistance
         while (true) {
             val index = hashArray[hash]
@@ -391,12 +398,13 @@ public actual class HashMap<K, V> private constructor(
     }
 
     private fun findKey(key: K): Int {
-        var hash = hash(key)
+        val hashCode = hashCodeOf(key)
+        var hash = slotOf(hashCode)
         var probesLeft = maxProbeDistance
         while (true) {
             val index = hashArray[hash]
             if (index == 0) return TOMBSTONE
-            if (keysArray[index - 1] == key) return index - 1
+            if (keyHashes[index - 1] == hashCode && keysArray[index - 1] == key) return index - 1
             if (--probesLeft < 0) return TOMBSTONE
             if (hash-- == 0) hash = hashSize - 1
         }
@@ -413,8 +421,9 @@ public actual class HashMap<K, V> private constructor(
 
     internal fun addKey(key: K): Int {
         checkIsMutable()
+        val hashCode = hashCodeOf(key)
         retry@ while (true) {
-            var hash = hash(key)
+            var hash = slotOf(hashCode)
             // put is allowed to grow maxProbeDistance with some limits (resize hash on reaching limits)
             val tentativeMaxProbeDistance = (maxProbeDistance * 2).coerceAtMost(hashSize / 2)
             var probeDistance = 0
@@ -427,6 +436,7 @@ public actual class HashMap<K, V> private constructor(
                     }
                     val putIndex = length++
                     keysArray[putIndex] = key
+                    keyHashes[putIndex] = hashCode
                     presenceArray[putIndex] = hash
                     hashArray[hash] = putIndex + 1
                     _size++
@@ -434,7 +444,7 @@ public actual class HashMap<K, V> private constructor(
                     if (probeDistance > maxProbeDistance) maxProbeDistance = probeDistance
                     return putIndex
                 }
-                if (keysArray[index - 1] == key) {
+                if (keyHashes[index - 1] == hashCode && keysArray[index - 1] == key) {
                     return -index
                 }
                 if (++probeDistance > tentativeMaxProbeDistance) {
@@ -481,7 +491,7 @@ public actual class HashMap<K, V> private constructor(
                 hashArray[hole] = 0
                 return
             }
-            val otherHash = hash(keysArray[index - 1])
+            val otherHash = slotOf(keyHashes[index - 1])
             // Bad case:
             //   - <--- [hash] ------ [hole] ------ [otherHash] ---> +
             //             \------------/
