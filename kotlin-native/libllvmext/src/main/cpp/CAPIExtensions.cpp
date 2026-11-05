@@ -271,7 +271,15 @@ LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
   }
   for (GlobalObject &GO : Hot->global_objects()) {
     GO.setComdat(nullptr);
-    if (!GO.isDeclaration())
+    if (GO.isDeclaration())
+      continue;
+    // The safepoint functions are inlined by the compiler's own passes after
+    // the LTO pipeline, which drops `available_externally` bodies: give the
+    // program copies of its own (internalized with the rest of the program).
+    if (GO.getName() == "Kotlin_mm_safePointFunctionPrologue" ||
+        GO.getName() == "Kotlin_mm_safePointWhileLoopBody")
+      GO.setLinkage(GlobalValue::LinkOnceODRLinkage);
+    else
       GO.setLinkage(GlobalValue::AvailableExternallyLinkage);
   }
   return wrap(Hot.release());
