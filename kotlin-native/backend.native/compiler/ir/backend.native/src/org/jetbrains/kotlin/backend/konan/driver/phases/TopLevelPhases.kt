@@ -534,6 +534,8 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     runAndMeasurePhase(RemoveRedundantCallsToStaticInitializersPhase, RedundantCallsInput(moduleDFG, module), disable = enablePreCodegenInliner || !runGlobalOptimizations)
     runAndMeasurePhase(DevirtualizationPhase, DevirtualizationInput(module, moduleDFG), disable = !runGlobalOptimizations)
     if (runGlobalOptimizations) {
+        // Kore: between the rounds: the first resolves the list iterators' calls, the second the calls this lowering emits.
+        org.jetbrains.kotlin.backend.konan.optimizations.ListIterationLowering(context.context, module).run()
         // Kore: a second round. The analysis merges the return values of a virtual call over all possible callees in
         // the program, so values returned by calls that were only devirtualized above (e.g. the iterator returned by
         // `list.iterator()`) still look polymorphic. Re-analyzing the devirtualized IR resolves the calls on them
