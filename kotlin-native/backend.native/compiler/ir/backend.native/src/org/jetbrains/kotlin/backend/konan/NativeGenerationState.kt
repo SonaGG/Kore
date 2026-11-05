@@ -76,6 +76,9 @@ internal class NativeGenerationState(
 
     lateinit var fileLowerState: FileLowerState
 
+    // Kore: native objects of the precompiled runtime to link the program with, see [linkPrecompiledRuntime].
+    val precompiledRuntimeObjects = mutableListOf<java.io.File>()
+
     val producedLlvmModuleContainsStdlib get() = llvmModuleSpecification.containsModule(context.stdlibModule)
 
     internal val runtimeModulesConfig = RuntimeModulesConfig(config)

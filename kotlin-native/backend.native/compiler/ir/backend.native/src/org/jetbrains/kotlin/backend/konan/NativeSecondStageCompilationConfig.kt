@@ -245,6 +245,9 @@ class NativeSecondStageCompilationConfig(
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u
 
+    val precompileRuntime: Boolean
+        get() = configuration.get(BinaryOptions.precompileRuntime) ?: true
+
     val concurrentWeakSweep: Boolean
         get() = configuration.get(BinaryOptions.concurrentWeakSweep) ?: true
 

@@ -8,6 +8,7 @@
 #include "PassesProfileHandler.h"
 
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
@@ -15,6 +16,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
 
 using namespace llvm;
@@ -194,4 +196,91 @@ int LLVMKotlinSplitModule(LLVMModuleRef M, unsigned Partitions,
     ++Written;
   });
   return Failed ? -1 : Written;
+}
+
+LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
+                                           unsigned HotInstructionLimit,
+                                           unsigned CalleeInstructionLimit,
+                                           unsigned CalleeDepth) {
+  Module &M = *unwrap(Runtime);
+
+  // The program and the native object compiled from `M` refer to each other's
+  // symbols, so nothing they share may be local or discardable. Locals are
+  // renamed so that they do not clash with other objects' external symbols.
+  for (GlobalValue &GV : M.global_values()) {
+    if (GV.getName().starts_with("llvm."))
+      continue;
+    if (GV.hasLocalLinkage()) {
+      GV.setName(GV.hasName() ? GV.getName() + ".kore.rt" : "kore.rt");
+      GV.setLinkage(GlobalValue::ExternalLinkage);
+      GV.setVisibility(GlobalValue::HiddenVisibility);
+    } else if (GV.hasLinkOnceODRLinkage()) {
+      GV.setLinkage(GlobalValue::WeakODRLinkage);
+    } else if (GV.hasLinkOnceLinkage()) {
+      GV.setLinkage(GlobalValue::WeakAnyLinkage);
+    }
+  }
+
+  // Interposable definitions may be replaced by the program's ones.
+  auto MayInline = [](const Function &F) {
+    return !F.isDeclaration() && !F.isInterposable() &&
+           !F.getName().starts_with("llvm.") &&
+           !F.hasFnAttribute(Attribute::NoInline);
+  };
+  // Small functions, and the not too large functions they call (such as the
+  // allocator's fast paths), which inlining into the program can flatten.
+  DenseSet<const Function *> Inlinable;
+  SmallVector<std::pair<const Function *, unsigned>> Worklist;
+  for (const Function &F : M) {
+    if (MayInline(F) && (F.hasFnAttribute(Attribute::AlwaysInline) ||
+                         F.getInstructionCount() <= HotInstructionLimit)) {
+      Inlinable.insert(&F);
+      Worklist.push_back({&F, 0});
+    }
+  }
+  while (!Worklist.empty()) {
+    auto [F, Depth] = Worklist.pop_back_val();
+    if (Depth >= CalleeDepth)
+      continue;
+    for (const Instruction &I : instructions(*F)) {
+      const auto *Call = dyn_cast<CallBase>(&I);
+      const Function *Callee = Call ? Call->getCalledFunction() : nullptr;
+      if (!Callee || !MayInline(*Callee) || Callee->hasFnAttribute(Attribute::Cold) ||
+          Callee->getInstructionCount() > CalleeInstructionLimit)
+        continue;
+      if (Inlinable.insert(Callee).second)
+        Worklist.push_back({Callee, Depth + 1});
+    }
+  }
+
+  auto KeepBody = [&](const GlobalValue *GV) {
+    if (auto *F = dyn_cast<Function>(GV))
+      return Inlinable.contains(F);
+    if (auto *V = dyn_cast<GlobalVariable>(GV))
+      return !V->getName().starts_with("llvm.") && !V->isInterposable() &&
+             V->isConstant() && !V->isThreadLocal();
+    return false;
+  };
+
+  ValueToValueMapTy VMap;
+  std::unique_ptr<Module> Hot = CloneModule(M, VMap, KeepBody);
+  for (const char *Name : {"llvm.global_ctors", "llvm.global_dtors",
+                           "llvm.used", "llvm.compiler.used"}) {
+    if (GlobalVariable *GV = Hot->getNamedGlobal(Name))
+      GV->eraseFromParent();
+  }
+  for (GlobalObject &GO : Hot->global_objects()) {
+    GO.setComdat(nullptr);
+    if (!GO.isDeclaration())
+      GO.setLinkage(GlobalValue::AvailableExternallyLinkage);
+  }
+  return wrap(Hot.release());
+}
+
+void LLVMKotlinAppendToUsed(LLVMModuleRef M, LLVMValueRef *Values,
+                            unsigned Count) {
+  SmallVector<GlobalValue *> GlobalValues;
+  for (unsigned I = 0; I < Count; ++I)
+    GlobalValues.push_back(unwrap<GlobalValue>(Values[I]));
+  appendToUsed(*unwrap(M), GlobalValues);
 }

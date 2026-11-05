@@ -210,7 +210,7 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
                     if (!depsFilePath.isNullOrEmpty()) {
                         depsFilePath.File().writeLines(DependenciesTrackingResult.serialize(dependenciesTrackingResult))
                     }
-                    val moduleCompilationOutput = ModuleCompilationOutput(bitcodeFile, dependenciesTrackingResult)
+                    val moduleCompilationOutput = ModuleCompilationOutput(bitcodeFile, dependenciesTrackingResult, generationState.precompiledRuntimeObjects.toList())
                     generationStateEngine.compileAndLink(
                             moduleCompilationOutput,
                             outputFiles.mainFileName,
@@ -363,6 +363,8 @@ private fun PhaseEngine<out Context>.splitIntoFragments(
 internal data class ModuleCompilationOutput(
         val bitcodeFile: java.io.File,
         val dependenciesTrackingResult: DependenciesTrackingResult,
+        // Kore: native objects to link in addition to the one compiled from [bitcodeFile].
+        val additionalObjectFiles: List<java.io.File> = emptyList(),
 )
 
 /**
@@ -401,7 +403,8 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.compileAndLink(
         temporaryFiles: TempFiles,
 ) {
     val compilationResult = temporaryFiles.create(File(outputFiles.nativeBinaryFile).name, ".o").javaFile()
-    val objectFiles = runAndMeasurePhase(ObjectFilesPhase, ObjectFilesPhaseInput(moduleCompilationOutput.bitcodeFile, compilationResult))
+    val objectFiles = runAndMeasurePhase(ObjectFilesPhase, ObjectFilesPhaseInput(moduleCompilationOutput.bitcodeFile, compilationResult)) +
+            moduleCompilationOutput.additionalObjectFiles
     val linkerOutputKind = determineLinkerOutput(context)
     val [linkerInput, cacheBinaries] = run {
         val resolvedCacheBinaries by lazy { resolveCacheBinaries(context.config.cachedLibraries, moduleCompilationOutput.dependenciesTrackingResult) }

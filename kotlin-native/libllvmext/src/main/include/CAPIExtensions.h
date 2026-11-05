@@ -42,6 +42,31 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
 int LLVMKotlinSplitModule(LLVMModuleRef M, unsigned Partitions,
                           const char *PathPrefix);
 
+/// Kore: prepares the linked runtime module `Runtime` to be compiled once into a
+/// native object that is shared by many programs, and returns a new module in
+/// the same context to link into a program instead of the runtime.
+///
+/// `Runtime` is modified: local symbols are externalized (renamed to stay
+/// unique, with hidden visibility) and discardable definitions are made
+/// non-discardable, so that the object compiled from it defines everything the
+/// returned module refers to.
+///
+/// The returned module declares everything defined by `Runtime`, except that
+/// it keeps the bodies of small functions (at most `HotInstructionLimit`
+/// instructions), of `alwaysinline` functions, and of the functions they call
+/// (transitively, up to `CalleeDepth` calls deep) that have at most
+/// `CalleeInstructionLimit` instructions, and the initializers of constants, as
+/// `available_externally` definitions, so that they can still be inlined into
+/// the program.
+LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
+                                           unsigned HotInstructionLimit,
+                                           unsigned CalleeInstructionLimit,
+                                           unsigned CalleeDepth);
+
+/// Kore: appends `Values` to `llvm.used` of `M`.
+void LLVMKotlinAppendToUsed(LLVMModuleRef M, LLVMValueRef *Values,
+                            unsigned Count);
+
 LLVM_C_EXTERN_C_END
 
 #endif

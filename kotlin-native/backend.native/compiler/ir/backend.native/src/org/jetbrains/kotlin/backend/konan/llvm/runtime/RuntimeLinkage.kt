@@ -53,6 +53,6 @@ internal fun linkRuntimeModules(generationState: NativeGenerationState, runtimeN
 /**
  * Perform runtime-specific bitcode processing (e.g. lower custom runtime annotations).
  */
-private fun prepareRuntimeModule(generationState: NativeGenerationState, module: LLVMModuleRef) {
+internal fun prepareRuntimeModule(generationState: NativeGenerationState, module: LLVMModuleRef) {
     handlePerformanceInlineAnnotation(generationState.config, BasicLlvmHelpers(generationState, module))
 }

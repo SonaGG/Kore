@@ -62,6 +62,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 
+    // Kore: link optimized executables against a separately compiled, cached runtime (default: true).
+    val precompileRuntime by booleanOption()
+
     val concurrentWeakSweep by booleanOption()
 
     val concurrentMarkMaxIterations by uintOption()

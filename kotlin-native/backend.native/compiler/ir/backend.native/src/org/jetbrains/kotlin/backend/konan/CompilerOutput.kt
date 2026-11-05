@@ -10,6 +10,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.*
 import org.jetbrains.kotlin.backend.konan.llvm.objc.patchObjCRuntimeModule
 import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModule
 import org.jetbrains.kotlin.backend.konan.llvm.runtime.linkRuntimeModules
+import org.jetbrains.kotlin.backend.konan.llvm.runtime.linkPrecompiledRuntime
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.config.nativeBinaryOptions.CCallMode
 import org.jetbrains.kotlin.config.nativeBinaryOptions.CInterfaceGenerationMode
@@ -90,7 +91,9 @@ internal fun produceCStubs(generationState: NativeGenerationState) {
 
 private data class LlvmModules(
         val runtimeModules: List<LLVMModuleRef>,
-        val additionalModules: List<LLVMModuleRef>
+        val additionalModules: List<LLVMModuleRef>,
+        // Kore: the module with the program's runtime constants, also the last of [runtimeModules] if there are any.
+        val runtimeConstantsModule: LLVMModuleRef? = null,
 )
 
 /**
@@ -199,16 +202,23 @@ private fun collectLlvmModules(generationState: NativeGenerationState, generated
             runtimeBitcodeFiles.takeIf { generationState.shouldLinkRuntimeNativeLibraries }.orEmpty()
     )
     val additionalModules = parseBitcodeFiles(additionalBitcodeFiles)
+    val runtimeConstantsModule = runtimeModules.ifNotEmpty { generationState.generateRuntimeConstantsModule() }
     return LlvmModules(
-            runtimeModules.ifNotEmpty { this + generationState.generateRuntimeConstantsModule() } ?: emptyList(),
-            additionalModules + listOfNotNull(patchObjCRuntimeModule(generationState))
+            runtimeModules + listOfNotNull(runtimeConstantsModule),
+            additionalModules + listOfNotNull(patchObjCRuntimeModule(generationState)),
+            runtimeConstantsModule,
     )
 }
 
 private fun linkAllDependencies(generationState: NativeGenerationState, generatedBitcodeFiles: List<String>) {
-    val (runtimeModules, additionalModules) = collectLlvmModules(generationState, generatedBitcodeFiles)
+    val [runtimeModules, additionalModules, runtimeConstantsModule] = collectLlvmModules(generationState, generatedBitcodeFiles)
+    // Kore: link a precompiled runtime when possible, see [linkPrecompiledRuntime].
+    val precompiledRuntime = runtimeConstantsModule?.let {
+        linkPrecompiledRuntime(generationState, runtimeModules - it)
+    }
     // TODO: Possibly slow, maybe to a separate phase?
-    val optimizedRuntimeModules = linkRuntimeModules(generationState, runtimeModules)
+    val optimizedRuntimeModules = precompiledRuntime?.let { listOfNotNull(it.inlinableModule, runtimeConstantsModule) }
+            ?: linkRuntimeModules(generationState, runtimeModules)
 
     // When the main module `generationState.llvmModule` is very large it is much faster to
     // link all the auxiliary modules together first before linking with the main module.
@@ -225,6 +235,7 @@ private fun linkAllDependencies(generationState: NativeGenerationState, generate
             error("Failed to link runtime and additional modules into main module")
         }
     }
+    precompiledRuntime?.preserveImports(generationState.llvmModule)
 }
 
 internal fun insertAliasToEntryPoint(context: NativeBackendPhaseContext, module: LLVMModuleRef) {
