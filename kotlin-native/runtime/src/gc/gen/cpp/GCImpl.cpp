@@ -25,9 +25,13 @@
 
 using namespace kotlin;
 
+std::atomic<bool> gc::internal::youngCollection = false;
+
 namespace {
 
-// Allocation volume between young collections when the scheduler does not configure one.
+using MarkTraits = gc::mark::ConcurrentMark::MarkTraits;
+
+// Allocation volume between young collections when `gcYoungGenerationSize` is not set.
 constexpr int64_t kDefaultYoungGenerationBytes = 64 * 1024 * 1024;
 
 ALWAYS_INLINE gc::internal::RememberedSet& currentRememberedSet() noexcept {
@@ -42,8 +46,20 @@ NO_INLINE void rememberObject(ObjHeader* holder) noexcept {
     currentRememberedSet().objects.push_back(holder);
 }
 
+// Allocated since the previous collection: neither old nor surviving the collection in progress. Objects allocated
+// during a concurrent full mark are marked ("black"), so they don't count as young.
 ALWAYS_INLINE bool isYoungHeapObject(ObjHeader* object) noexcept {
-    return object != nullptr && object->heap() && !alloc::objectDataForObject(object).marked();
+    return object != nullptr && object->heap() && !alloc::objectDataForObject(object).oldOrSurviving();
+}
+
+ALWAYS_INLINE void rememberIfOldToYoung(ObjHeader* holder, ObjHeader* value) noexcept {
+    if (__builtin_expect(!holder->heap(), false)) return; // Stack objects are roots; permanent objects are immutable.
+    auto& holderData = alloc::objectDataForObject(holder);
+    if (__builtin_expect(!holderData.oldOrSurviving(), true)) return; // Young holders are traced anyway.
+    if (!isYoungHeapObject(value)) return;
+    if (holderData.tryRemember()) {
+        rememberObject(holder);
+    }
 }
 
 } // namespace
@@ -52,9 +68,12 @@ ALWAYS_INLINE bool isYoungHeapObject(ObjHeader* object) noexcept {
 // GenerationalGC
 // ---------------------------------------------------------------------------------------------------------------------
 
-gc::internal::GenerationalGC::GenerationalGC(alloc::Allocator& allocator, gcScheduler::GCScheduler& gcScheduler) noexcept :
+gc::internal::GenerationalGC::GenerationalGC(
+        alloc::Allocator& allocator, gcScheduler::GCScheduler& gcScheduler, GCStateHolder& state, mark::ConcurrentMark& mark) noexcept :
     allocator_(allocator),
     gcScheduler_(gcScheduler),
+    state_(state),
+    mark_(mark),
     thread_(std::string_view("Main GC thread"), [this] { body(); }) {
     auto& youngGenerationBytes = gcScheduler_.config().youngGenerationBytes;
     if (youngGenerationBytes.load(std::memory_order_relaxed) == 0) {
@@ -66,14 +85,14 @@ gc::internal::GenerationalGC::GenerationalGC(alloc::Allocator& allocator, gcSche
     fullCollectionThresholdBytes_ = initialFullCollectionThresholdBytes();
 }
 
+gc::internal::GenerationalGC::~GenerationalGC() {
+    state_.shutdown();
+}
+
 size_t gc::internal::GenerationalGC::initialFullCollectionThresholdBytes() const noexcept {
     // Until the first full collection measured the live heap, use the scheduler's initial heap target.
     auto& config = gcScheduler_.config();
     return static_cast<size_t>(std::max(config.targetHeapBytes.load(std::memory_order_relaxed), config.minHeapBytes.load(std::memory_order_relaxed)));
-}
-
-gc::internal::GenerationalGC::~GenerationalGC() {
-    state_.shutdown();
 }
 
 int64_t gc::internal::GenerationalGC::schedule(bool full) noexcept {
@@ -96,6 +115,7 @@ void gc::internal::GenerationalGC::clearForTests() noexcept {
     fullCollectionDue_ = false;
     fullCollectionThresholdBytes_ = initialFullCollectionThresholdBytes();
     lastCollectionKind_.store(-1, std::memory_order_relaxed);
+    youngCollection.store(false, std::memory_order_relaxed);
 }
 
 std::optional<bool> gc::internal::GenerationalGC::lastCollectionWasYoung() const noexcept {
@@ -118,6 +138,7 @@ void gc::internal::GenerationalGC::body() noexcept {
             break;
         }
     }
+    mark_.requestShutdown();
 }
 
 void gc::internal::GenerationalGC::collectRememberedSets(RememberedSet& into) noexcept {
@@ -132,16 +153,24 @@ void gc::internal::GenerationalGC::collectRememberedSets(RememberedSet& into) no
     orphaned_.moveInto(into);
 }
 
-void gc::internal::GenerationalGC::dropRememberedSets() noexcept {
-    RememberedSet dropped;
-    collectRememberedSets(dropped);
+void gc::internal::GenerationalGC::keepLiveRememberedSetEntries() noexcept {
+    // A full collection does not need the remembered sets, but the next young collection does: entries recorded
+    // before or during this collection are kept for it. Logged objects that this collection found dead are dropped
+    // (they are about to be freed). Slots are kept as they are: resolving a slot only trusts the allocator's current
+    // pages and objects, and no object allocated after this collection can be old by the next young collection.
+    RememberedSet all;
+    collectRememberedSets(all);
+    all.objects.erase(
+            std::remove_if(all.objects.begin(), all.objects.end(), [](ObjHeader* holder) {
+                return !alloc::objectDataForObject(holder).marked();
+            }),
+            all.objects.end());
+    std::unique_lock guard(orphanedMutex_);
+    all.moveInto(orphaned_);
 }
 
-void gc::internal::GenerationalGC::clearMarks() noexcept {
-    allocator_.TraverseAllocatedObjects([](ObjHeader* object) noexcept { alloc::objectDataForObject(object).reset(); });
-}
-
-void gc::internal::GenerationalGC::markRememberedSet(MarkQueue& markQueue, RememberedSet& rememberedSet) noexcept {
+void gc::internal::GenerationalGC::markRememberedSet(
+        mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet) noexcept {
     // Objects logged by the holder-aware barrier: rescan all their references.
     for (ObjHeader* holder : rememberedSet.objects) {
         alloc::objectDataForObject(holder).forget();
@@ -154,10 +183,10 @@ void gc::internal::GenerationalGC::markRememberedSet(MarkQueue& markQueue, Remem
             }
         }
     }
-    // Slots recorded by the generic barrier: only those inside old (marked) objects are roots. Slots in young objects
-    // are traced if their object is reachable; stack, global and thread-local slots are part of the root set already.
+    // Slots recorded by the generic barrier: only those inside old objects are roots. Slots in young objects are
+    // traced if their object is reachable; stack, global and thread-local slots are part of the root set already.
     allocator_.forEachHeapSlot(rememberedSet.slots, [&markQueue](ObjHeader** slot, ObjHeader* owner) noexcept {
-        if (!alloc::objectDataForObject(owner).marked()) return;
+        if (!alloc::objectDataForObject(owner).old()) return;
         ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
         if (value != nullptr && value->heap()) {
             MarkTraits::tryEnqueue(markQueue, value);
@@ -165,35 +194,44 @@ void gc::internal::GenerationalGC::markRememberedSet(MarkQueue& markQueue, Remem
     });
 }
 
+void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noexcept {
+    stopTheWorld(gcHandle, "GC stop the world: young collection");
+    gcScheduler_.onGCStart();
+    state_.start(gcHandle.getEpoch());
+
+    RememberedSet rememberedSet;
+    collectRememberedSets(rememberedSet);
+    mark_.markYoungInSTW(gcHandle, [&](mark::ConcurrentMark::ParallelProcessor::Worker& worker) {
+        markRememberedSet(worker, rememberedSet);
+    });
+}
+
+void gc::internal::GenerationalGC::performFullCollection(GCHandle gcHandle) noexcept {
+    mark_.setupBeforeSTW(gcHandle);
+    stopTheWorld(gcHandle, "GC stop the world: full collection");
+    gcScheduler_.onGCStart();
+    state_.start(gcHandle.getEpoch());
+
+    // Marks concurrently with the mutators; returns with the world stopped again and the barriers disabled.
+    mark_.markInSTW();
+
+    keepLiveRememberedSetEntries();
+}
+
 void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
     auto mainGCLock = mm::GlobalData::Instance().gc().gcLock();
 
     bool full = fullCollectionRequested_.exchange(false, std::memory_order_acq_rel) || fullCollectionDue_;
+    youngCollection.store(!full, std::memory_order_relaxed);
     auto gcHandle = GCHandle::create(epoch);
-    if (!full) gcHandle.youngCollection();
-
-    stopTheWorld(gcHandle, full ? "GC stop the world: full collection" : "GC stop the world: young collection");
-
-    gcScheduler_.onGCStart();
-
-    state_.start(epoch);
-
-    RememberedSet rememberedSet;
     if (full) {
-        // Every object becomes young again; the full mark below re-marks (promotes) everything that is alive.
-        dropRememberedSets();
-        clearMarks();
+        performFullCollection(gcHandle);
     } else {
-        collectRememberedSets(rememberedSet);
+        gcHandle.youngCollection();
+        performYoungCollection(gcHandle);
     }
 
-    collectRootSet<MarkTraits>(gcHandle, markQueue_, [](mm::ThreadData&) { return true; });
-    if (!full) {
-        markRememberedSet(markQueue_, rememberedSet);
-    }
-    Mark<MarkTraits>(gcHandle, markQueue_);
-    processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
-
+    // The world is stopped and marking is complete.
     for (auto& thread : mm::ThreadRegistry::Instance().LockForIter()) {
         thread.allocator().prepareForGC();
     }
@@ -202,7 +240,9 @@ void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
     } else {
         allocator_.prepareForYoungGC();
     }
+    resumeTheWorld(gcHandle);
 
+    // Concurrent sweep: mutators sweep the pages they need themselves, the rest is swept here.
     allocator_.sweep(gcHandle);
 
     // Objects kept by this collection, including old objects in pages a young collection did not sweep.
@@ -222,8 +262,6 @@ void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
 
     gcScheduler_.onGCFinish(epoch, heapBytes);
 
-    resumeTheWorld(gcHandle);
-
     state_.finish(epoch);
     gcHandle.finished();
 
@@ -236,17 +274,25 @@ void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
 // GC interface
 // ---------------------------------------------------------------------------------------------------------------------
 
-gc::GC::ThreadData::ThreadData(GC& gc, mm::ThreadData& threadData) noexcept : impl_(std::make_unique<Impl>(gc)) {}
+gc::GC::ThreadData::ThreadData(GC& gc, mm::ThreadData& threadData) noexcept : impl_(std::make_unique<Impl>(gc, threadData)) {}
 
 gc::GC::ThreadData::~ThreadData() = default;
 
-void gc::GC::ThreadData::OnSuspendForGC() noexcept {}
+void gc::GC::ThreadData::OnSuspendForGC() noexcept {
+    impl_->mark_.onSuspendForGC();
+}
 
-void gc::GC::ThreadData::safePoint() noexcept {}
+void gc::GC::ThreadData::safePoint() noexcept {
+    impl_->mark_.onSafePoint();
+}
 
-void gc::GC::ThreadData::onThreadRegistration() noexcept {}
+void gc::GC::ThreadData::onThreadRegistration() noexcept {
+    impl_->barriers_.onThreadRegistration();
+}
 
-ALWAYS_INLINE void gc::GC::ThreadData::onAllocation(ObjHeader* object) noexcept {}
+PERFORMANCE_INLINE void gc::GC::ThreadData::onAllocation(ObjHeader* object) noexcept {
+    impl_->barriers_.onAllocation(object);
+}
 
 gc::GC::GC(alloc::Allocator& allocator, gcScheduler::GCScheduler& gcScheduler) noexcept :
     impl_(std::make_unique<Impl>(allocator, gcScheduler)) {
@@ -262,12 +308,12 @@ void gc::GC::ClearForTests() noexcept {
 
 // static
 PERFORMANCE_INLINE void gc::GC::processObjectInMark(void* state, ObjHeader* object) noexcept {
-    gc::internal::processObjectInMark<gc::internal::MarkTraits>(state, object);
+    gc::internal::processObjectInMark<MarkTraits>(state, object);
 }
 
 // static
 PERFORMANCE_INLINE void gc::GC::processArrayInMark(void* state, ArrayHeader* array) noexcept {
-    gc::internal::processArrayInMark<gc::internal::MarkTraits>(state, array);
+    gc::internal::processArrayInMark<MarkTraits>(state, array);
 }
 
 int64_t gc::GC::Schedule() noexcept {
@@ -279,71 +325,64 @@ int64_t gc::GC::ScheduleYoung() noexcept {
 }
 
 void gc::GC::WaitFinished(int64_t epoch) noexcept {
-    impl_->gc_.state().waitEpochFinished(epoch);
+    impl_->state_.waitEpochFinished(epoch);
 }
 
 void gc::GC::WaitFinalizers(int64_t epoch) noexcept {
-    impl_->gc_.state().waitEpochFinalized(epoch);
+    impl_->state_.waitEpochFinalized(epoch);
 }
 
 void gc::GC::onEpochFinalized(int64_t epoch) noexcept {
     GCHandle::getByEpoch(epoch).finalizersDone();
-    impl_->gc_.state().finalized(epoch);
+    impl_->state_.finalized(epoch);
 }
 
-// Generic write barrier: every heap reference store from compiled code and the runtime ends up here. The owner of the
-// slot is unknown (it can even be a stack object, a global or a thread-local), so record the slot itself whenever a
-// young object is stored; the next young collection resolves it.
+// Generic write barrier: stores without a known holder (volatile and atomic fields, atomic array elements, globals,
+// thread-locals). Snapshot-at-the-beginning during a concurrent full mark; otherwise record the slot whenever a young
+// object is stored, for the next young collection to resolve.
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {
+    barriers::beforeHeapRefUpdate(ref, value, loadAtomic);
     if (__builtin_expect(isYoungHeapObject(value), false)) {
         rememberSlot(ref.location());
     }
 }
 
-// Holder-aware barrier: log an old holder (once) when it receives a young object.
-PERFORMANCE_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {
-    if (holder == nullptr || !holder->heap()) return;
-    auto& holderData = alloc::objectDataForObject(holder);
-    if (!holderData.marked()) return; // Young holders are traced anyway.
-    if (!isYoungHeapObject(value)) return;
-    if (holderData.tryRemember()) {
-        rememberObject(holder);
-    }
-}
-
 // Write barrier for field and array element stores (`UpdateHeapRefInObject`), i.e. almost every heap reference store.
 // Stores into young objects (the common case, e.g. initializing a new object) need nothing: young objects are traced
-// if reachable. Stack objects are roots and permanent objects are never collected.
+// if reachable.
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
-    if (__builtin_expect(!holder->heap(), false)) return;
-    auto& holderData = alloc::objectDataForObject(holder);
-    if (__builtin_expect(!holderData.marked(), true)) return;
-    if (!isYoungHeapObject(value)) return;
-    if (holderData.tryRemember()) {
-        rememberObject(holder);
-    }
+    barriers::beforeHeapRefUpdate(ref, value, false);
+    rememberIfOldToYoung(holder, value);
 }
 
-ALWAYS_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
-    RETURN_OBJ(weakReferee.load(std::memory_order_relaxed));
+// Stores that bypass the store functions (attaching a weak reference implementation to ExtraObjectData).
+PERFORMANCE_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {
+    if (holder == nullptr || value == nullptr) return;
+    rememberIfOldToYoung(holder, value);
 }
 
-bool gc::isMarked(ObjHeader* object) noexcept {
-    return alloc::objectDataForObject(object).marked();
+PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
+    RETURN_OBJ(gc::barriers::weakRefReadBarrier(weakReferee));
 }
 
-// Sticky marks: survivors keep their mark (and become old). Only a full collection clears marks, before marking.
+// Alive in the collection in progress: marked, or old during a young collection (which does not mark old objects).
+PERFORMANCE_INLINE bool gc::isMarked(ObjHeader* object) noexcept {
+    auto& objectData = alloc::objectDataForObject(object);
+    return objectData.marked() || (internal::isYoungCollection() && objectData.old());
+}
+
+// Sweep: survivors become old and their marks are reset. A young collection keeps unmarked old objects.
 PERFORMANCE_INLINE bool gc::tryResetMark(GC::ObjectData& objectData) noexcept {
-    return objectData.marked();
+    return objectData.sweep(/* fullCollection = */ !internal::isYoungCollection());
 }
 
 ALWAYS_INLINE bool gc::barriers::ExternalRCRefReleaseGuard::isNoop() {
-    return true;
+    return false;
 }
-ALWAYS_INLINE gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard(mm::DirectRefAccessor) noexcept {}
-ALWAYS_INLINE gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard(ExternalRCRefReleaseGuard&&) noexcept = default;
-ALWAYS_INLINE gc::barriers::ExternalRCRefReleaseGuard::~ExternalRCRefReleaseGuard() noexcept = default;
-ALWAYS_INLINE gc::barriers::ExternalRCRefReleaseGuard& gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard::operator=(
+PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard(mm::DirectRefAccessor ref) noexcept : impl_(ref) {}
+PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard(ExternalRCRefReleaseGuard&& other) noexcept = default;
+PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard::~ExternalRCRefReleaseGuard() noexcept = default;
+PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard& gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard::operator=(
         ExternalRCRefReleaseGuard&&) noexcept = default;
 
 // static

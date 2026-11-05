@@ -8,7 +8,12 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include <atomic>
+#include <mutex>
+
+#include "ExternalRCRef.hpp"
 #include "GlobalData.hpp"
+#include "TestSupport.hpp"
 #include "TracingGCTest.hpp"
 
 using namespace kotlin;
@@ -31,12 +36,197 @@ public:
 
 } // namespace
 
-// The shared conformance suite. Every collection it requests is a full one (`GC::Schedule()`).
-REGISTER_TYPED_TEST_SUITE_WITH_LISTS(TracingGCTest, TRACING_GC_TEST_LIST);
-INSTANTIATE_TYPED_TEST_SUITE_P(GEN, TracingGCTest, GenerationalMarkAndSweepTest);
+// Full collections use the `cms` collector's concurrent marker: the same concurrency tests apply (copied from
+// gc/cms/cpp/GCImplTest.cpp).
+TYPED_TEST_P(TracingGCTest, WeakResurrectionAtMarkTermination) {
+    std::vector<Mutator> mutators(kDefaultThreadCount);
+    std::vector<test_support::RegularWeakReferenceImpl*> weaks(kDefaultThreadCount);
+    std::vector<test_support::Object<Payload>*> roots(kDefaultThreadCount);
 
-REGISTER_TYPED_TEST_SUITE_WITH_LISTS(STWMarkGCTest, STW_MARK_GC_TEST_LIST);
-INSTANTIATE_TYPED_TEST_SUITE_P(GEN, STWMarkGCTest, GenerationalMarkAndSweepTest);
+    // initialize threads
+    for (int i = 0; i < kDefaultThreadCount; ++i) {
+        mutators[i]
+                .Execute([&, i](mm::ThreadData& threadData, Mutator& mutator) {
+                    roots[i] = &AllocateObject(threadData);
+                    mutator.AddGlobalRoot(roots[i]->header());
+
+                    auto& weakReferee = AllocateObject(threadData);
+                    auto& weakRef = [&threadData, &weakReferee]() -> test_support::RegularWeakReferenceImpl& {
+                        ObjHolder holder;
+                        return test_support::InstallWeakReference(threadData, weakReferee.header(), holder.slot());
+                    }();
+                    EXPECT_NE(weakRef.get(), nullptr);
+                    weaks[i] = &weakRef;
+                    mutator.AddGlobalRoot(weakRef.header());
+                })
+                .wait();
+    }
+
+    auto epoch = mm::GlobalData::Instance().gc().Schedule();
+    std::atomic gcDone = false;
+
+    // Spin until thread suspension is requested.
+    while (!mm::IsThreadSuspensionRequested()) {
+    }
+
+    std::vector<std::future<void>> mutatorFutures;
+    for (int i = 0; i < kDefaultThreadCount; ++i) {
+        mutatorFutures.emplace_back(mutators[i].Execute([&, i](mm::ThreadData& threadData, Mutator& mutator) noexcept {
+            while (!gc::mark::test_support::flushActionRequested() && !gcDone.load(std::memory_order_relaxed)) {
+                safePoint(threadData);
+            }
+
+            threadData.gc().impl().mark_.onSafePoint();
+
+            auto weakReferee = weaks[i]->get();
+            (*roots[i])->field2 = weakReferee;
+            bool resurrected = weakReferee != nullptr;
+
+            while (!gcDone.load(std::memory_order_relaxed)) {
+                safePoint(threadData);
+            }
+
+            if (resurrected) {
+                EXPECT_NE(weaks[i]->get(), nullptr);
+            } else {
+                EXPECT_EQ(weaks[i]->get(), nullptr);
+            }
+        }));
+    }
+
+    mm::GlobalData::Instance().gc().WaitFinalizers(epoch);
+    gcDone = true;
+
+    for (auto& future : mutatorFutures) {
+        future.wait();
+    }
+
+    for (int i = 0; i < kDefaultThreadCount; ++i) {
+        mutators[i]
+                .Execute([&, i](mm::ThreadData&, Mutator&) noexcept {
+                    if (auto weakReferee = weaks[i]->get()) {
+                        auto& extraObj = *mm::ExtraObjectData::Get(weakReferee);
+                        extraObj.ClearRegularWeakReferenceImpl();
+                        extraObj.Uninstall();
+                        alloc::destroyExtraObjectData(extraObj);
+                    }
+                })
+                .wait();
+    }
+}
+
+TYPED_TEST_P(TracingGCTest, ReleaseStableRefDuringRSCollection) {
+    std::vector<Mutator> mutators(kDefaultThreadCount);
+
+    std::atomic<size_t> readyThreads = 0;
+    std::atomic<bool> gcDone = false;
+
+    std::vector<std::future<void>> mutatorFutures;
+    for (int i = 0; i < kDefaultThreadCount; ++i) {
+        mutatorFutures.push_back(mutators[i].Execute([&](mm::ThreadData& threadData, Mutator& mutator) {
+            auto& obj = AllocateObject(threadData);
+            mm::OwningExternalRCRef stableRef(obj.header());
+
+            ++readyThreads;
+            while (!mm::IsThreadSuspensionRequested()) {
+            }
+
+            mm::safePoint();
+
+            mutator.AddStackRoot(obj.header());
+            stableRef.reset();
+
+            while (!gcDone) {
+                mm::safePoint();
+            }
+
+            EXPECT_THAT(mutator.Alive(), testing::Contains(obj.header()));
+        }));
+    }
+
+    while (readyThreads < kDefaultThreadCount) {
+    }
+
+    mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
+    gcDone = true;
+
+    for (auto& future : mutatorFutures) {
+        future.wait();
+    }
+}
+
+TYPED_TEST_P(TracingGCTest, TerminateInSTW) {
+    // Try to drive the concurrent mark to terminate in STW (after several unsuccessful concurrent attempts).
+    // Construct a linked list of arrays and continuously steal from the list just one step ahead of the GC's mark front.
+
+    constexpr int kListLength = 1000;
+    constexpr int kArraySize = 200;
+    // too many threads over-pace the GC
+    constexpr int kMutatorsCount = 2;
+
+    std::atomic gcDone = false;
+    std::atomic ready = 0;
+
+    std::vector<Mutator> mutators{kMutatorsCount};
+    std::vector<std::future<void>> futures{};
+    for (auto& mutator : mutators) {
+        futures.emplace_back(mutator.Execute([&ready, &gcDone](mm::ThreadData& threadData, Mutator&mutator) {
+            //prepare
+            auto& global = mutator.AddGlobalRoot();
+            auto& local = mutator.AddStackRoot();
+
+            for (int i = 0; i < kListLength; ++i) {
+                auto& next = AllocateArray<kArraySize>(threadData);
+                next.elements()[kArraySize - 1] = global->field1.accessor().load();
+                global->field1 = next.header();
+            }
+            local->field1 = global->field1.accessor().load();
+
+            ++ready;
+
+            // wait for GC
+            while (!mm::IsThreadSuspensionRequested()) {}
+            mm::safePoint(threadData);
+
+            // run
+            while (!gcDone.load(std::memory_order_relaxed)) {
+                auto* nextPtr = local->field1.accessor().load()->array();
+                if (nextPtr == nullptr) break;
+
+                auto& next = test_support::ObjectArray<kArraySize>::FromArrayHeader(nextPtr);
+                auto lastAccessor = next.elements()[kArraySize - 1].accessor();
+                local->field1 = lastAccessor.load();
+                lastAccessor.store(nullptr);
+
+                while (!mm::test_support::safePointsAreActive() && !gcDone.load(std::memory_order_relaxed)) {}
+                mm::safePoint(threadData);
+            }
+
+            // let the GC catch up if we were too fast
+            while (!gcDone) {
+                mm::safePoint(threadData);
+            }
+        }));
+    }
+
+    while (ready < kMutatorsCount) {}
+
+    mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
+    gcDone = true;
+
+    for (auto& future : futures) {
+        future.wait();
+    }
+}
+
+// The shared conformance suite. Every collection it requests is a full one (`GC::Schedule()`).
+REGISTER_TYPED_TEST_SUITE_WITH_LISTS(
+        TracingGCTest, TRACING_GC_TEST_LIST,
+        WeakResurrectionAtMarkTermination,
+        ReleaseStableRefDuringRSCollection,
+        TerminateInSTW
+);
+INSTANTIATE_TYPED_TEST_SUITE_P(GEN, TracingGCTest, GenerationalMarkAndSweepTest);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Generational behaviour.
@@ -46,6 +236,13 @@ namespace {
 
 class GenerationalGCTest : public testing::Test {
 public:
+    GenerationalGCTest() {
+        // The tests choose young or full collections explicitly: keep the heap-size policy from upgrading a young
+        // collection to a full one (the allocator's byte counters are not reset between tests).
+        mm::GlobalData::Instance().gcScheduler().config().targetHeapBytes = std::numeric_limits<int64_t>::max() / 2;
+        mm::GlobalData::Instance().gc().ClearForTests();
+    }
+
     ~GenerationalGCTest() override {
         mm::GlobalsRegistry::Instance().ClearForTests();
         mm::ExternalRCRefRegistry::instance().clearForTests();
@@ -73,6 +270,10 @@ void collectYoung() {
     ASSERT_THAT(generationalGC().lastCollectionWasYoung(), std::optional<bool>(true));
 }
 
+bool isOld(ObjHeader* object) {
+    return alloc::objectDataForObject(object).old();
+}
+
 void collectFull() {
     collect(true);
     ASSERT_THAT(generationalGC().lastCollectionWasYoung(), std::optional<bool>(false));
@@ -90,7 +291,7 @@ TEST_F(GenerationalGCTest, YoungCollectionFreesYoungGarbage) {
         collectYoung();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header()));
-        EXPECT_TRUE(gc::isMarked(global.header())) << "survivors are promoted";
+        EXPECT_TRUE(isOld(global.header())) << "survivors are promoted";
     });
 }
 
@@ -101,7 +302,7 @@ TEST_F(GenerationalGCTest, OldGarbageSurvivesYoungCollectionsUntilFullCollection
         global->field1 = object.header();
         collectYoung();
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), object.header()));
-        ASSERT_TRUE(gc::isMarked(object.header()));
+        ASSERT_TRUE(isOld(object.header()));
 
         global->field1 = nullptr;
         collectYoung();
@@ -116,7 +317,7 @@ TEST_F(GenerationalGCTest, OldToYoungFieldStoreKeepsYoungObjectAlive) {
     RunInNewThread([](mm::ThreadData& threadData) {
         GlobalObjectHolder global{threadData};
         collectFull();
-        ASSERT_TRUE(gc::isMarked(global.header()));
+        ASSERT_TRUE(isOld(global.header()));
 
         // Only reachable through the old global object: a young collection must find the edge via the barrier.
         ObjHeader* young;
@@ -142,7 +343,7 @@ TEST_F(GenerationalGCTest, OldToYoungArrayStoreKeepsYoungObjectAlive) {
     RunInNewThread([](mm::ThreadData& threadData) {
         GlobalObjectArrayHolder array{threadData};
         collectFull();
-        ASSERT_TRUE(gc::isMarked(array.header()));
+        ASSERT_TRUE(isOld(array.header()));
 
         ObjHeader* young;
         {

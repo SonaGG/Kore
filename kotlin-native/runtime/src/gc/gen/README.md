@@ -6,26 +6,28 @@ A non-moving, generational collector for the Kotlin/Native runtime. Enable it wi
 
 Kotlin/Native objects cannot move. StableRefs, cinterop pointers, ObjC bridging and pinned objects expose raw object
 addresses to native code. So the young generation is not a separate space that survivors are copied out of. It is a
-*state* of an object: generations use **sticky mark bits**.
+*state* of an object, kept in its GC word (`GC::ObjectData`, below):
 
-- **Young** means unmarked. Every new object is unmarked: `GC::ObjectData` is zero.
-- **Old** means marked. Marks are *not* cleared by the sweeper ("sticky"). An object that survives one collection
-  becomes old in place.
+- **Young** means not old. Every new object is young.
+- **Old** is a sticky bit, set by the sweeper on every object that survives a collection: an object that survives one
+  collection becomes old in place.
+
+The mark state is separate from the old bit and is reset by every sweep, so a full collection can start marking without
+first clearing marks.
 
 ## Collections
 
 ### Minor (young) collection
 
-Runs with the world stopped:
+Marking runs with the world stopped, on the GC thread:
 
-1. Collect roots: thread stacks, TLS, globals and StableRefs. Old objects are already marked, so marking skips them and
-   stops tracing there.
+1. Collect roots: thread stacks, TLS, globals and StableRefs. Marking skips old objects and stops tracing there.
 2. Process the remembered sets (below). Every old→young edge created since the last collection is treated as a root.
 3. Mark transitively. Only young objects get marked; marking never enters the old generation.
 4. Process weak references.
-5. Sweep only pages that were allocated into since the last collection (the allocator's `used` pages). Pages that
-   weren't touched contain only old objects. Unmarked objects are freed, and marked ones stay marked, so they become
-   old.
+5. Resume the world, then sweep concurrently (mutators sweep the pages they need themselves). Only pages that were
+   allocated into since the last collection (the allocator's `used` pages) are swept; untouched pages contain only old
+   objects. Unmarked young objects are freed, marked ones become old, unmarked old objects are kept.
 
 The cost is proportional to live young objects, plus remembered-set entries, plus pages touched since the last
 collection. It does not depend on the size of the old generation.
@@ -40,9 +42,15 @@ The young generation size (the allocation volume between young collections) defa
 
 ### Major (full) collection
 
-1. Clear every mark (one linear pass over the heap) and drop the remembered sets.
-2. Run an ordinary full mark from the roots and process weak references.
-3. Sweep every page. Survivors stay marked, so the whole live heap is old afterwards.
+Uses the `cms` collector's concurrent marker (snapshot-at-the-beginning deletion barrier, objects allocated during
+marking are marked, mutator-local mark queues flushed at safepoints):
+
+1. Stop the world, collect the mutators' roots, enable the barriers, resume.
+2. Mark the whole heap concurrently with the mutators, then process weak references (with a weak-reference read
+   barrier). If marking keeps finding new work, it finishes with the world stopped.
+3. Stop the world briefly: disable the barriers, keep the remembered-set entries of live objects for the next young
+   collection, resume.
+4. Sweep every page concurrently. Survivors become old, unmarked objects are freed.
 
 `GC.collect()`, `GC::Schedule()` and the timer always request a major collection. Allocation pressure requests a young
 collection through `GC::ScheduleYoung()`. The collector upgrades that to a major one when the heap after the last young
@@ -75,12 +83,12 @@ thread registry lock is held, so nothing is lost.
 
 ## `GC::ObjectData`
 
-One word before each heap object, as in the stop-the-world collector:
+One word before each heap object:
 
-| Value                                       | Meaning                                       |
-|---------------------------------------------|-----------------------------------------------|
-| `0`                                         | young (unmarked)                              |
-| non-zero                                    | marked/old: `1`, or a mark-queue link pointer |
-| bit 1 (`kRemembered`) set on a marked value | old and already logged in an object buffer    |
+| Bits | Meaning |
+|---|---|
+| bit 0 (`kOld`) | the object survived a collection. Set by the sweeper; cleared only when the object is freed |
+| bit 1 (`kRemembered`) | the (old) object is logged in a remembered set since the last young collection |
+| bits 2+ | mark state: `0` unmarked; `4` marked; otherwise a mark queue link (8-byte aligned pointer) |
 
-Queue links are 8-byte aligned, so bit 1 is always free.
+All updates are atomic read-modify-writes, because mutators set `kRemembered` while markers and sweepers update the rest.
