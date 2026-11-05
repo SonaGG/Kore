@@ -76,105 +76,11 @@ static bool isBoundedLoop(Loop &L, ScalarEvolution &SE) {
 }
 
 
-/// Whether `Load` reads an array length: Kore's runtime gives array lengths a
-/// type of their own in type-based alias analysis (`ArrayLengthRep`).
-static bool isArrayLengthLoad(const LoadInst &Load) {
-  const MDNode *Tag = Load.getMetadata(LLVMContext::MD_tbaa);
-  if (!Tag || Tag->getNumOperands() < 2)
-    return false;
-  const auto *AccessType = dyn_cast<MDNode>(Tag->getOperand(1));
-  if (!AccessType || AccessType->getNumOperands() < 1)
-    return false;
-  const auto *Name = dyn_cast<MDString>(AccessType->getOperand(0));
-  return Name && Name->getString() == "_ZTS14ArrayLengthRep";
-}
-
-/// Whether `L` inspects the type of `Object` (loads its type info, at offset 0,
-/// or passes it to a runtime type check), so that a length load in `L` may be
-/// guarded by a type check and `Object` may not be an array everywhere.
-static bool checksTypeIn(const Loop &L, const Value *Object) {
-  for (const BasicBlock *BB : L.blocks()) {
-    for (const Instruction &I : *BB) {
-      if (const auto *Load = dyn_cast<LoadInst>(&I)) {
-        if (Load->getPointerOperand() == Object)
-          return true;
-      } else if (const auto *Call = dyn_cast<CallBase>(&I)) {
-        const Function *Callee = Call->getCalledFunction();
-        if (Callee && Callee->getName().starts_with("IsInstance") &&
-            is_contained(Call->args(), Object))
-          return true;
-        if (!Callee && is_contained(Call->args(), Object))
-          return true;
-      }
-    }
-  }
-  return false;
-}
-
-/// Loads the lengths of arrays used in loops once, before the outermost loop
-/// in which the array is invariant, instead of at every bounds check. Kotlin
-/// arrays never change length, and a non-null array reference always points to
-/// a valid array; for a null one (whose length load would crash anyway) the
-/// load reads 0 instead, without a branch. Loop-invariant lengths let range
-/// check elimination split loops into ones without bounds checks, which can
-/// then be vectorized.
-static bool hoistArrayLengths(Function &F, LoopInfo &LI) {
-  const DataLayout &DL = F.getDataLayout();
-  SmallVector<LoadInst *> Loads;
-  for (Instruction &I : instructions(F)) {
-    auto *Load = dyn_cast<LoadInst>(&I);
-    if (Load && Load->isSimple() && LI.getLoopFor(Load->getParent()) &&
-        isArrayLengthLoad(*Load))
-      Loads.push_back(Load);
-  }
-  if (Loads.empty())
-    return false;
-  GlobalVariable *Zero = nullptr;
-  // One hoisted length per (array, offset, preheader).
-  DenseMap<std::tuple<Value *, int64_t, BasicBlock *>, Value *> Hoisted;
-  bool Changed = false;
-  for (LoadInst *Load : Loads) {
-    APInt Offset(DL.getIndexTypeSizeInBits(Load->getPointerOperandType()), 0);
-    Value *Array = Load->getPointerOperand()->stripAndAccumulateInBoundsConstantOffsets(DL, Offset);
-    // The outermost loop in which the array is invariant.
-    Loop *Target = nullptr;
-    for (Loop *L = LI.getLoopFor(Load->getParent()); L && L->isLoopInvariant(Array) && L->getLoopPreheader() &&
-                    !checksTypeIn(*L, Array);
-         L = L->getParentLoop())
-      Target = L;
-    if (!Target)
-      continue;
-    BasicBlock *Preheader = Target->getLoopPreheader();
-    auto Key = std::make_tuple(Array, Offset.getSExtValue(), Preheader);
-    Value *Length = Hoisted.lookup(Key);
-    if (!Length) {
-      if (!Zero) {
-        Zero = new GlobalVariable(*F.getParent(), Load->getType(), /*isConstant=*/true,
-                                  GlobalValue::PrivateLinkage, Constant::getNullValue(Load->getType()),
-                                  "kore.zero.length");
-        Zero->setAlignment(Load->getAlign());
-      }
-      IRBuilder<> Builder(Preheader->getTerminator());
-      Value *Address = Builder.CreateInBoundsPtrAdd(Array, Builder.getInt(Offset));
-      Value *IsNull = Builder.CreateIsNull(Array);
-      Value *Safe = Builder.CreateSelect(IsNull, Zero, Address);
-      auto *Hoist = Builder.CreateAlignedLoad(Load->getType(), Safe, Load->getAlign(), "array.length");
-      Hoist->copyMetadata(*Load, {LLVMContext::MD_tbaa, LLVMContext::MD_range});
-      Hoisted[Key] = Length = Hoist;
-    }
-    Load->replaceAllUsesWith(Length);
-    Load->eraseFromParent();
-    Changed = true;
-  }
-  return Changed;
-}
-
 PreservedAnalyses LoopSafepointsPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
   bool Changed = removeInlinedPrologueSafepoints(F);
   if (PrologueOnly)
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
-  Changed |= hoistArrayLengths(F, AM.getResult<LoopAnalysis>(F));
   SmallVector<CallBase *> Polls;
   for (Instruction &I : instructions(F)) {
     if (isPendingLoopSafepoint(I))

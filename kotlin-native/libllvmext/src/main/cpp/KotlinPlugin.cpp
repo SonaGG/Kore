@@ -62,6 +62,17 @@ static auto parsePass(StringRef Name, StringRef PassName, F &&Parser)
 // loops (frame calls kept opaque during inlining) more than it gains.
 static constexpr bool ShrinkWrapFrames = false;
 
+// Kore: for bisecting miscompilations, `KORE_DISABLE_PASSES` lists Kore passes
+// to leave out (e.g. `osr,irce`).
+static bool passDisabled(StringRef Name) {
+  auto Disabled = sys::Process::GetEnv("KORE_DISABLE_PASSES");
+  if (!Disabled)
+    return false;
+  SmallVector<StringRef> Names;
+  StringRef(*Disabled).split(Names, ',');
+  return is_contained(Names, Name);
+}
+
 // Kore: optimizations LLVM has but does not enable by default (some of which
 // other compilers enable at their highest levels): constraint-based removal
 // of redundant (bounds) checks, jump threading of state machines, loop
@@ -107,19 +118,22 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                 [](FunctionPassManager &PM, OptimizationLevel) {
                   // Replace objects by their fields while allocations are
                   // still calls.
-                  PM.addPass(ObjectScalarReplacementPass());
+                  if (!passDisabled("osr"))
+                    PM.addPass(ObjectScalarReplacementPass());
                   PM.addPass(LoopSafepointsPass());
                   // Then place GC frames, now that safepoints are decided.
                   if (ShrinkWrapFrames)
                     PM.addPass(ShrinkWrapFramesPass());
                   // Then split loops into one without array bounds checks and
                   // (rarely run) ones with them, so that they can be vectorized.
-                  PM.addPass(IRCEPass());
+                  if (!passDisabled("irce"))
+                    PM.addPass(IRCEPass());
                 });
             // Kore: static hotness for the inliner.
             PB.registerPipelineEarlySimplificationEPCallback(
                 [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
-                  PM.addPass(createModuleToFunctionPassAdaptor(LoopCallBonusPass()));
+                  if (!passDisabled("callbonus"))
+                    PM.addPass(createModuleToFunctionPassAdaptor(LoopCallBonusPass()));
                   if (ShrinkWrapFrames)
                     PM.addPass(PendingFramesPass());
                 });

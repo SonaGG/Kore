@@ -281,9 +281,12 @@ class CachedLibraries(
     }
 
     companion object {
-        fun getPerFileCachedLibraryName(library: KotlinLibrary): String = "${library.uniqueName}-per-file-cache"
+        // Kore: unique names may contain characters that are not allowed in file names (e.g. `group:name`).
+        fun fileNameOf(uniqueName: String): String = uniqueName.replace(Regex("[:<>\"|?*\\/]"), "_")
+
+        fun getPerFileCachedLibraryName(library: KotlinLibrary): String = "${fileNameOf(library.uniqueName)}-per-file-cache"
         fun getCachedLibraryName(library: KotlinLibrary): String = getCachedLibraryName(library.uniqueName)
-        fun getCachedLibraryName(libraryName: String): String = "$libraryName-cache"
+        fun getCachedLibraryName(libraryName: String): String = "${fileNameOf(libraryName)}-cache"
 
         private fun computeLibraryHash(library: KotlinLibrary, librariesHashes: MutableMap<String, FingerprintHash>) =
                 librariesHashes.getOrPut(library.uniqueName) {
@@ -311,7 +314,8 @@ class CachedLibraries(
         ): File {
             val dependencies = library.getAllTransitiveDependencies(allLibraries)
             val fingerprintHash = computeDependenciesFingerprint(listOf(library) + dependencies, librariesHashes)
-            return baseCacheDirectory.child(library.uniqueName).child(fingerprintHash.toString())
+            val directoryName = fileNameOf(library.uniqueName)
+            return baseCacheDirectory.child(directoryName).child(fingerprintHash.toString())
         }
 
         const val PER_FILE_CACHE_IR_LEVEL_DIR_NAME = "ir"

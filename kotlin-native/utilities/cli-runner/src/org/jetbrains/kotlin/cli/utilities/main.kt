@@ -12,9 +12,13 @@ import org.jetbrains.kotlin.cli.bc.mainNoExitWithXcodeRenderer as konancMainWith
 import org.jetbrains.kotlin.backend.konan.env.setEnv
 import org.jetbrains.kotlin.utils.usingNativeMemoryAllocator
 
+private val removedArgumentsOfOlderPlugins = setOf("-no-endorsed-libs")
+
 private fun mainImpl(args: Array<String>, runFromDaemon: Boolean, konancMain: (Array<String>) -> Unit) {
     val utilityName = args[0]
-    val utilityArgs = args.drop(1).toTypedArray()
+    // Kore: accept arguments that older Kotlin Gradle plugins still pass but this compiler version reports as removed
+    // (a warning, which fails builds with -Werror), so that Kore works with those plugins too.
+    val utilityArgs = args.drop(1).filter { it !in removedArgumentsOfOlderPlugins }.toTypedArray()
     when (utilityName) {
         "konanc" ->
             konancMain(utilityArgs)
