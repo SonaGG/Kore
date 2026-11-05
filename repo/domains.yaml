@@ -1,0 +1,105 @@
+$schema: domains.schema.json
+
+Compiler:
+  include:
+    - "compiler/**"
+    - "core/**"
+    - "build-common/**"
+    - "compiler/psi/parser/**"
+    - "plugins/plugin-sandbox/**"
+    - "plugins/scripting/**"
+    - "jps/**"
+  exclude:
+    - "compiler/psi/**"
+  fullyAffectedBy:
+    - CoreLibs
+
+Wasm:
+  include:
+    - "wasm/**"
+    - "js/js.translator/testData/**"
+  fullyAffectedBy:
+    - Compiler
+    - CoreLibs
+Js:
+  include:
+    - "js/**"
+    - "libraries/tools/analysis-api-based-klib-reader/**"
+  fullyAffectedBy:
+    - Compiler
+    - CoreLibs
+
+Native:
+  include:
+    - "native/**"
+    - "kotlin-native/**"
+  exclude:
+    - "native/swift/**"
+  fullyAffectedBy:
+    - Compiler
+    - CoreLibs
+
+CoreLibs:
+  include:
+    - "libraries/stdlib/**"
+    - "libraries/reflect/**"
+    - "libraries/kotlin.test/**"
+
+AnalysisApi:
+  include:
+    - "analysis/**"
+    - "compiler/psi/**"
+    - "prepare/analysis-api/**"
+  exclude:
+    - "compiler/psi/parser/**"
+  fullyAffectedBy:
+    - Compiler
+    - CoreLibs
+
+SwiftExport:
+  include:
+    - "native/swift/**"
+    - "libraries/tools/analysis-api-based-klib-reader/**"
+  fullyAffectedBy:
+    - AnalysisApi # todo: Replace this dependency with a reviewed set of @AffectedByAnalysisApi tests
+
+CompilerPlugins:
+  include:
+    - "plugins/**"
+  fullyAffectedBy:
+    - Compiler
+
+Gradle:
+  include:
+    - "libraries/tools/*gradle*/**"
+
+Maven:
+  include:
+    - "libraries/tools/*maven*/**"
+
+# The IntelliJ domain has no owned files in this repository.
+# It is used to declare which domains will affect IntelliJ and to infer when to run tests against kt-master
+IntelliJ:
+  include:
+    - "prepare/ide-plugin-dependencies/**"
+  fullyAffectedBy:
+    - Compiler
+    - AnalysisApi
+    - CoreLibs
+
+BuildInfrastructure:
+  include:
+    - "repo/**"
+    - "gradle/**"
+    - "build.gradle.kts"
+    - "settings.gradle.kts"
+    - "gradle.properties"
+    - "scripts/**"
+    - ".space/**"
+    - ".idea/**"
+
+Unknown:
+  # Files not matching other domains will be sorted into 'Unknown' by default.
+  include: [ ]
+  fullyAffectedBy:
+    - Compiler
