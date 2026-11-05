@@ -362,8 +362,15 @@ class NativeSecondStageCompilationConfig(
         configuration.llvmLtoPasses
     }
 
+    // Kore: without an explicit threshold, the pre-codegen inliner runs in a targeted mode, see [preCodegenInlineTargeted].
     val preCodegenInlineThreshold: UInt by lazy {
-        configuration.get(BinaryOptions.preCodegenInlineThreshold) ?: 0U
+        configuration.get(BinaryOptions.preCodegenInlineThreshold) ?: KORE_TARGETED_INLINE_THRESHOLD
+    }
+
+    // Kore: inline only small functions returning a new object (`Vec3.plus`, `toBlockPos()`): escape
+    // analysis runs before LLVM inlines, so it can only put such results on the stack once they are inlined.
+    val preCodegenInlineTargeted: Boolean by lazy {
+        configuration.get(BinaryOptions.preCodegenInlineThreshold) == null
     }
 
     val enableDebugTransparentStepping: Boolean
@@ -744,3 +751,4 @@ private fun String.isRelease(): Boolean {
 
     return metaString.isEmpty() && build.isEmpty()
 }
+private const val KORE_TARGETED_INLINE_THRESHOLD = 40U

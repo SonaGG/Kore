@@ -41,6 +41,21 @@ internal class PreCodegenInliner(
     private val invokeSuspendFunction = symbols.invokeSuspendFunction
 
     private val inlineThreshold = context.config.preCodegenInlineThreshold.toInt()
+    private val targeted = context.config.preCodegenInlineTargeted
+
+    // Kore: whether [body] returns an object it allocates.
+    private fun returnsNewObject(body: DataFlowIR.FunctionBody): Boolean {
+        val visited = mutableSetOf<DataFlowIR.Node>()
+        fun reaches(node: DataFlowIR.Node): Boolean {
+            if (!visited.add(node)) return false
+            return when (node) {
+                is DataFlowIR.Node.AllocInstance -> true
+                is DataFlowIR.Node.Variable -> node.values.any { reaches(it.node) }
+                else -> false
+            }
+        }
+        return reaches(body.returns)
+    }
 
     private val rootSet = callGraph.rootSet
 
@@ -123,6 +138,7 @@ internal class PreCodegenInliner(
                         val calleeSize = callee.body.allScopes.sumOf { it.nodes.size }
                         val shouldInline = !isALoop // As FunctionInlining doesn't work with recursive functions.
                                 && calleeSize <= inlineThreshold
+                                && (!targeted || returnsNewObject(callee.body))
                                 && calleeIrFunction.symbol != context.symbols.entryPoint // Might be unexpected to not see [main] in stacktraces.
                                 && !calleeIrFunction.isBoxOrUnbox()
                                 && !calleeIrFunction.isLazyStaticInitializer
