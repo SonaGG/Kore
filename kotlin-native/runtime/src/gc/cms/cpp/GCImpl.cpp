@@ -83,6 +83,10 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHe
 // Kore: new objects are allocated black during marking, so no extra edge needs to be recorded.
 ALWAYS_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {}
 
+PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
+    barriers::beforeHeapRefUpdate(ref, value, false);
+}
+
 PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(gc::barriers::weakRefReadBarrier(weakReferee));
 }

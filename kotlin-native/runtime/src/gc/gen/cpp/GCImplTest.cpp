@@ -272,3 +272,37 @@ TEST_F(GenerationalGCTest, FullCollectionClearsRememberedSets) {
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header()));
     });
 }
+
+TEST_F(GenerationalGCTest, StoreInObjectIntoOldHolderLogsHolder) {
+    RunInNewThread([](mm::ThreadData& threadData) {
+        GlobalObjectArrayHolder array{threadData};
+        collectFull();
+
+        ObjHeader* young;
+        {
+            auto& object = AllocateObject(threadData);
+            young = object.header();
+            UpdateHeapRefInObject(array.header(), array[1].ptr(), young);
+        }
+        auto& rememberedSet = threadData.gc().impl().rememberedSet();
+        EXPECT_THAT(rememberedSet.objects, testing::ElementsAre(array.header()));
+        EXPECT_THAT(rememberedSet.slots, testing::IsEmpty());
+
+        collectYoung();
+
+        EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(array.header(), young));
+    });
+}
+
+TEST_F(GenerationalGCTest, StoreInObjectIntoYoungHolderRecordsNothing) {
+    RunInNewThread([](mm::ThreadData& threadData) {
+        auto& holder = AllocateObject(threadData);
+        auto& object = AllocateObject(threadData);
+        UpdateHeapRefInObject(holder.header(), holder->field1.ptr(), object.header());
+
+        auto& rememberedSet = threadData.gc().impl().rememberedSet();
+        EXPECT_THAT(rememberedSet.objects, testing::IsEmpty());
+        EXPECT_THAT(rememberedSet.slots, testing::IsEmpty());
+        EXPECT_THAT(holder->field1.direct().load(), object.header());
+    });
+}

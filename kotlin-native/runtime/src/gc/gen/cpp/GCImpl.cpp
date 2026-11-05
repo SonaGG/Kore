@@ -311,6 +311,19 @@ PERFORMANCE_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHe
     }
 }
 
+// Write barrier for field and array element stores (`UpdateHeapRefInObject`), i.e. almost every heap reference store.
+// Stores into young objects (the common case, e.g. initializing a new object) need nothing: young objects are traced
+// if reachable. Stack objects are roots and permanent objects are never collected.
+PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
+    if (__builtin_expect(!holder->heap(), false)) return;
+    auto& holderData = alloc::objectDataForObject(holder);
+    if (__builtin_expect(!holderData.marked(), true)) return;
+    if (!isYoungHeapObject(value)) return;
+    if (holderData.tryRemember()) {
+        rememberObject(holder);
+    }
+}
+
 ALWAYS_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(weakReferee.load(std::memory_order_relaxed));
 }

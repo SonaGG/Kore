@@ -1717,11 +1717,17 @@ internal class CodeGeneratorVisitor(
         if (value.origin == StaticInitializersOrigins.INITIALIZE_GLOBAL_FIELD && field.type.binaryTypeIsReference()) {
             call(llvm.registerGlobalFunction, listOf(address))
         }
-        functionGenerationContext.storeAny(
-                valueToAssign, address, field.type.binaryTypeIsReference(), false,
-                isVolatile = field.hasAnnotation(KonanFqNames.volatile),
-                alignment = alignment,
-        )
+        val isVolatile = field.hasAnnotation(KonanFqNames.volatile)
+        if (thisPtr != null && field.type.binaryTypeIsReference() && !isVolatile) {
+            // Kore: let the GC barrier know which object is written to.
+            functionGenerationContext.storeHeapRefInObject(valueToAssign, address, thisPtr)
+        } else {
+            functionGenerationContext.storeAny(
+                    valueToAssign, address, field.type.binaryTypeIsReference(), false,
+                    isVolatile = isVolatile,
+                    alignment = alignment,
+            )
+        }
 
         assert (value.type.isUnit())
         return codegen.theUnitInstanceRef.llvm

@@ -53,20 +53,22 @@ collection exceeds the major threshold. That threshold is the live heap after th
 
 A minor collection must find every reference stored into an old object that points to a young object.
 
-- **Slot buffer (generic path).** Every heap reference store already reaches `gc::beforeHeapRefUpdate(slot, value)`.
-  When `value` is a young heap object, the slot address is appended to a thread-local buffer.
-  - The barrier does not know which object owns the slot. A slot can also be in a stack-allocated object, a global or
-    a thread-local.
-  - So a minor collection resolves the buffered slots against the heap's pages: it sorts them, finds the containing
-    page, then the containing object.
+- **Object buffer (holder-aware path, the common case).** Compiled code stores into instance fields through
+  `UpdateHeapRefInObject(holder, slot, value)`; the runtime's array helpers (`Array.set`, `fill`, `copyInto`) do the
+  same. Its barrier, `gc::beforeHeapRefUpdateInObject`, works like this:
+  - A store into a young holder returns after one load of the holder's GC word. This covers object initialization and
+    most stores in allocation-heavy code; nothing is recorded.
+  - The first time an old holder receives a young value, the holder is logged in a thread-local buffer, and a spare bit
+    in `GC::ObjectData` (`kRemembered`) records that it was logged. A minor collection rescans each logged holder.
+  - `gc::afterReferenceStoreInObject(holder, value)` applies the same logging to stores that bypass the store
+    functions. Attaching a weak-reference implementation object to an object's `ExtraObjectData` is the one such store.
+- **Slot buffer (generic path).** The remaining stores reach `gc::beforeHeapRefUpdate(slot, value)` without a holder:
+  volatile and atomic fields, atomic array elements, globals and thread-locals. When `value` is a young heap object,
+  the slot address is appended to a thread-local buffer.
+  - A minor collection resolves the buffered slots against the heap's pages: it sorts them, finds the containing page,
+    then the containing object.
   - A slot inside an old object is treated as a root. Other slots are ignored: young objects get traced anyway, and
     stack, global and TLS slots are roots already.
-- **Object buffer (holder-aware path).** `gc::afterReferenceStoreInObject(holder, value)` logs the *holder* the first
-  time an old object receives a young value. A spare bit in `GC::ObjectData` (`kRemembered`) records that it was
-  logged. A minor collection rescans each logged holder.
-  - Today this path handles the one store that bypasses `beforeHeapRefUpdate`: attaching a weak-reference
-    implementation object to an object's `ExtraObjectData`.
-  - Codegen can later route ordinary field stores through it, which is much cheaper than buffering slots.
 
 Each buffer is per thread. When a thread exits, its buffers are handed over to the collector. That happens while the
 thread registry lock is held, so nothing is lost.

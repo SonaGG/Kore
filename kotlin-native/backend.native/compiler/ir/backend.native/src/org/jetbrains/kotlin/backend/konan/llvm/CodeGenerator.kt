@@ -747,6 +747,12 @@ internal abstract class FunctionGenerationContext(
         updateRef(value, ptr, onStack = true)
     }
 
+    // Kore: non-volatile store of a reference into a field of `holder`. Unlike storeHeapRef, the GC barrier also gets
+    // the object being written to (generational GCs skip stores into young objects).
+    fun storeHeapRefInObject(value: LLVMValueRef, ptr: LLVMValueRef, holder: LLVMValueRef) {
+        call(llvm.updateHeapRefInObjectFunction, listOf(holder, ptr, value))
+    }
+
     fun storeAny(value: LLVMValueRef, ptr: LLVMValueRef, isObjectRef: Boolean, onStack: Boolean, isVolatile: Boolean = false, alignment: Int? = null) {
         when {
             isObjectRef -> updateRef(value, ptr, onStack, isVolatile, alignment)
