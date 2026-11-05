@@ -25,6 +25,44 @@ static bool isPendingLoopSafepoint(const Instruction &I) {
   return Callee && Callee->getName() == LoopSafepointName;
 }
 
+
+static constexpr StringLiteral PrologueSafepointName =
+    "Kotlin_mm_safePointFunctionPrologue";
+
+static bool isPrologueSafepoint(const Instruction &I) {
+  const auto *Call = dyn_cast<CallBase>(&I);
+  const Function *Callee = Call ? Call->getCalledFunction() : nullptr;
+  return Callee && Callee->getName() == PrologueSafepointName;
+}
+
+/// The prologue polls of inlined callees are redundant with the function's own
+/// (at its entry) and its loops' ones, but as opaque calls they keep LLVM from
+/// optimizing across them, so remove them as soon as they are inlined, with
+/// the same policy as `LLVMKotlinRemoveRedundantSafepoints`, which runs after
+/// optimization: keep the first poll of the entry block, and if there is none,
+/// the first poll of every block.
+static bool removeInlinedPrologueSafepoints(Function &F) {
+  SmallVector<Instruction *> ToRemove;
+  bool EntryHasPoll = false;
+  for (BasicBlock &BB : F) {
+    bool KeepFirst = BB.isEntryBlock() || !EntryHasPoll;
+    for (Instruction &I : BB) {
+      if (!isPrologueSafepoint(I))
+        continue;
+      if (KeepFirst) {
+        KeepFirst = false;
+        if (BB.isEntryBlock())
+          EntryHasPoll = true;
+      } else {
+        ToRemove.push_back(&I);
+      }
+    }
+  }
+  for (Instruction *I : ToRemove)
+    I->eraseFromParent();
+  return !ToRemove.empty();
+}
+
 /// Whether `L` runs at most 2^32 times, so that a mutator spends a bounded
 /// time in it between safepoints of the enclosing code.
 static bool isBoundedLoop(Loop &L, ScalarEvolution &SE) {
@@ -38,13 +76,14 @@ static bool isBoundedLoop(Loop &L, ScalarEvolution &SE) {
 
 PreservedAnalyses LoopSafepointsPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
+  bool Changed = removeInlinedPrologueSafepoints(F);
   SmallVector<CallBase *> Polls;
   for (Instruction &I : instructions(F)) {
     if (isPendingLoopSafepoint(I))
       Polls.push_back(cast<CallBase>(&I));
   }
   if (Polls.empty())
-    return PreservedAnalyses::all();
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);

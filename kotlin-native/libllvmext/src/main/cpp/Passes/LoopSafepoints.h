@@ -14,7 +14,8 @@ namespace llvm::kotlin {
 /// function is simplified. This pass removes the polls from innermost loops
 /// that run at most 2^32 times (like the counted-loop rule of the JVMs'
 /// compilers and LLVM's PlaceSafepoints), so that they can be vectorized and
-/// have their invariants hoisted, and inlines the remaining polls.
+/// have their invariants hoisted, and inlines the remaining polls. It also
+/// removes the function prologue polls of inlined callees.
 class LoopSafepointsPass : public PassInfoMixin<LoopSafepointsPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
