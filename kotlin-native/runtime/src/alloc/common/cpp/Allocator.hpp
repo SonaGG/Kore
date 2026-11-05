@@ -80,6 +80,9 @@ public:
     bool mainThreadFinalizerProcessorAvailable() noexcept;
 
     void sweep(gc::GCHandle gcHandle) noexcept;
+    // Kore: like sweep, but the object pages may be swept by several threads: `runInParallel(task)` must run `task` on
+    // the calling thread and on helper threads, and return when all of them have finished.
+    void sweep(gc::GCHandle gcHandle, const std::function<void(const std::function<void()>&)>& runInParallel) noexcept;
     void scheduleFinalization(gc::GCHandle gcHandle) noexcept;
 
 private:

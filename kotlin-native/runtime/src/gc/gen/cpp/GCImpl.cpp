@@ -242,8 +242,9 @@ void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
     }
     resumeTheWorld(gcHandle);
 
-    // Concurrent sweep: mutators sweep the pages they need themselves, the rest is swept here.
-    allocator_.sweep(gcHandle);
+    // Concurrent sweep (with the GC helper threads): the sooner it is done, the sooner allocation reuses swept pages
+    // instead of fresh memory.
+    allocator_.sweep(gcHandle, [this](const std::function<void()>& task) { mark_.runInParallel(task); });
 
     // Objects kept by this collection, including old objects in pages a young collection did not sweep.
     auto heapBytes = allocator_.objectBytes();

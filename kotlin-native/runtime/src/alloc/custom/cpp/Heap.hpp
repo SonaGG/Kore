@@ -42,6 +42,8 @@ public:
     // returns true. If multiple sweepers are active, each page will only be
     // seen by one sweeper.
     FinalizerQueue Sweep(gc::GCHandle gcHandle) noexcept;
+    // Kore: sweeps the multi-object pages with `runInParallel` (see Allocator::sweep), the rest on the calling thread.
+    FinalizerQueue Sweep(gc::GCHandle gcHandle, const std::function<void(const std::function<void()>&)>& runInParallel) noexcept;
 
     FixedBlockPage* GetFixedBlockPage(uint32_t cellCount, FinalizerQueue& finalizerQueue) noexcept;
     NextFitPage* GetNextFitPage(uint32_t cellCount, FinalizerQueue& finalizerQueue) noexcept;

@@ -103,8 +103,12 @@ bool alloc::Allocator::mainThreadFinalizerProcessorAvailable() noexcept {
 }
 
 void alloc::Allocator::sweep(gc::GCHandle gcHandle) noexcept {
+    sweep(gcHandle, [](const std::function<void()>& task) { task(); });
+}
+
+void alloc::Allocator::sweep(gc::GCHandle gcHandle, const std::function<void(const std::function<void()>&)>& runInParallel) noexcept {
     // also sweeps extraObjects
-    auto finalizerQueue = impl_->heap().Sweep(gcHandle);
+    auto finalizerQueue = impl_->heap().Sweep(gcHandle, runInParallel);
     for (auto& thread : kotlin::mm::ThreadRegistry::Instance().LockForIter()) {
         finalizerQueue.mergeFrom(thread.allocator().impl().alloc().ExtractFinalizerQueue());
     }

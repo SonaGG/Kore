@@ -152,6 +152,11 @@ bool alloc::Allocator::mainThreadFinalizerProcessorAvailable() noexcept {
     return impl_->finalizerProcessor().mainThreadAvailable();
 }
 
+// Kore: the legacy allocator sweeps on the calling thread only.
+void alloc::Allocator::sweep(gc::GCHandle gcHandle, const std::function<void(const std::function<void()>&)>&) noexcept {
+    sweep(gcHandle);
+}
+
 void alloc::Allocator::sweep(gc::GCHandle gcHandle) noexcept {
     auto state = std::move(impl_->sweepState());
     impl_->sweepState() = std::nullopt; // optional does not become empty when it's moved-from.

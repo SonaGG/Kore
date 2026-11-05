@@ -135,6 +135,9 @@ public:
 
     ~ConcurrentMark();
 
+    // Kore: runs `task` on the calling thread and on the GC helper threads; returns when all of them have finished.
+    void runInParallel(const std::function<void()>& task) noexcept;
+
     // Kore: stops the young-collection mark helpers.
     void requestShutdown();
 
@@ -166,19 +169,19 @@ private:
 
     void resetMutatorFlags();
 
-    // Kore: helper threads that join the young collection's mark (world stopped), parked between collections.
-    void startYoungMarkHelpers(GCHandle gcHandle) noexcept;
-    void waitYoungMarkHelpers() noexcept;
-    void youngMarkHelperBody() noexcept;
+    // Kore: GC helper threads (young collections' mark, sweeping), parked between uses.
+    void startHelpers(std::function<void()> task) noexcept;
+    void waitHelpers() noexcept;
+    void helperBody() noexcept;
 
-    std::vector<ScopedThread> youngMarkHelpers_;
-    std::mutex youngMarkHelpersMutex_;
-    std::condition_variable youngMarkHelpersStart_;
-    std::condition_variable youngMarkHelpersDone_;
-    uint64_t youngMarkRound_ = 0;
-    size_t youngMarkHelpersRunning_ = 0;
-    bool youngMarkHelpersShutdown_ = false;
-    GCHandle youngMarkHandle_ = GCHandle::invalid();
+    std::vector<ScopedThread> helpers_;
+    std::mutex helpersMutex_;
+    std::condition_variable helpersStart_;
+    std::condition_variable helpersDone_;
+    uint64_t helpersRound_ = 0;
+    size_t helpersRunning_ = 0;
+    bool helpersShutdown_ = false;
+    std::function<void()> helpersTask_;
 
     GCHandle gcHandle_ = GCHandle::invalid();
     std::optional<mm::ThreadRegistry::Iterable> lockedMutatorsList_;

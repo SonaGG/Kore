@@ -141,54 +141,58 @@ gc::mark::ConcurrentMark::~ConcurrentMark() {
 
 void gc::mark::ConcurrentMark::requestShutdown() {
     {
-        std::unique_lock lock(youngMarkHelpersMutex_);
-        youngMarkHelpersShutdown_ = true;
+        std::unique_lock lock(helpersMutex_);
+        helpersShutdown_ = true;
     }
-    youngMarkHelpersStart_.notify_all();
-    youngMarkHelpers_.clear(); // joins
+    helpersStart_.notify_all();
+    helpers_.clear(); // joins
 }
 
-void gc::mark::ConcurrentMark::youngMarkHelperBody() noexcept {
+void gc::mark::ConcurrentMark::helperBody() noexcept {
     uint64_t seenRound = 0;
     while (true) {
-        GCHandle handle = GCHandle::invalid();
+        std::function<void()> task;
         {
-            std::unique_lock lock(youngMarkHelpersMutex_);
-            youngMarkHelpersStart_.wait(lock, [&] { return youngMarkHelpersShutdown_ || youngMarkRound_ != seenRound; });
-            if (youngMarkHelpersShutdown_) return;
-            seenRound = youngMarkRound_;
-            handle = youngMarkHandle_;
+            std::unique_lock lock(helpersMutex_);
+            helpersStart_.wait(lock, [&] { return helpersShutdown_ || helpersRound_ != seenRound; });
+            if (helpersShutdown_) return;
+            seenRound = helpersRound_;
+            task = helpersTask_;
         }
+        task();
         {
-            ParallelProcessor::Worker worker(*parallelProcessor_);
-            Mark<MarkTraits>(handle, worker);
-        }
-        {
-            std::unique_lock lock(youngMarkHelpersMutex_);
-            if (--youngMarkHelpersRunning_ == 0) youngMarkHelpersDone_.notify_all();
+            std::unique_lock lock(helpersMutex_);
+            if (--helpersRunning_ == 0) helpersDone_.notify_all();
         }
     }
 }
 
-void gc::mark::ConcurrentMark::startYoungMarkHelpers(GCHandle gcHandle) noexcept {
-    if (youngMarkHelpers_.empty()) {
+void gc::mark::ConcurrentMark::startHelpers(std::function<void()> task) noexcept {
+    if (helpers_.empty()) {
         for (size_t i = 0, count = youngMarkHelperCount(); i < count; ++i) {
-            youngMarkHelpers_.emplace_back(ScopedThread::attributes().name("GC young mark helper"), [this] { youngMarkHelperBody(); });
+            helpers_.emplace_back(ScopedThread::attributes().name("GC helper"), [this] { helperBody(); });
         }
     }
-    if (youngMarkHelpers_.empty()) return;
+    if (helpers_.empty()) return;
     {
-        std::unique_lock lock(youngMarkHelpersMutex_);
-        youngMarkHandle_ = gcHandle;
-        youngMarkHelpersRunning_ = youngMarkHelpers_.size();
-        ++youngMarkRound_;
+        std::unique_lock lock(helpersMutex_);
+        helpersTask_ = std::move(task);
+        helpersRunning_ = helpers_.size();
+        ++helpersRound_;
     }
-    youngMarkHelpersStart_.notify_all();
+    helpersStart_.notify_all();
 }
 
-void gc::mark::ConcurrentMark::waitYoungMarkHelpers() noexcept {
-    std::unique_lock lock(youngMarkHelpersMutex_);
-    youngMarkHelpersDone_.wait(lock, [&] { return youngMarkHelpersRunning_ == 0; });
+void gc::mark::ConcurrentMark::waitHelpers() noexcept {
+    std::unique_lock lock(helpersMutex_);
+    helpersDone_.wait(lock, [&] { return helpersRunning_ == 0; });
+    helpersTask_ = nullptr;
+}
+
+void gc::mark::ConcurrentMark::runInParallel(const std::function<void()>& task) noexcept {
+    startHelpers(task);
+    task();
+    waitHelpers();
 }
 
 void gc::mark::ConcurrentMark::markYoungInSTW(
@@ -199,12 +203,15 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
         ParallelProcessor::Worker worker(*parallelProcessor_);
         // Helpers register their own workers and take batches the GC thread shares while it collects roots and marks.
         // A helper that arrives after the mark has terminated just finds no work.
-        startYoungMarkHelpers(gcHandle);
+        startHelpers([this, gcHandle] {
+            ParallelProcessor::Worker helperWorker(*parallelProcessor_);
+            Mark<MarkTraits>(gcHandle, helperWorker);
+        });
         collectRootSet<MarkTraits>(gcHandle, worker, [](mm::ThreadData&) { return true; });
         markRememberedSets(worker);
         Mark<MarkTraits>(gcHandle, worker);
     }
-    waitYoungMarkHelpers();
+    waitHelpers();
     gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
     parallelProcessor_.destroy();
 }

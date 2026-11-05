@@ -104,15 +104,30 @@ void Heap::ForEachHeapSlot(
 }
 
 FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle) noexcept {
+    return Sweep(gcHandle, [](const std::function<void()>& task) { task(); });
+}
+
+FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle, const std::function<void(const std::function<void()>&)>& runInParallel) noexcept {
     FinalizerQueue finalizerQueue;
     CustomAllocDebug("Heap: before sweep FinalizerQueue size == %zu", finalizerQueue.size());
     CustomAllocDebug("Heap::Sweep()");
     {
+        // Pages are taken from the stores atomically, so several threads can sweep the same stores.
+        std::mutex finalizerQueueMutex;
+        runInParallel([&] {
+            FinalizerQueue localQueue;
+            {
+                auto sweepHandle = gcHandle.sweep();
+                for (int blockSize = 0; blockSize <= FixedBlockPage::MAX_BLOCK_SIZE; ++blockSize) {
+                    fixedBlockPages_[blockSize].Sweep(sweepHandle, localQueue);
+                }
+                nextFitPages_.Sweep(sweepHandle, localQueue);
+            }
+            std::unique_lock guard(finalizerQueueMutex);
+            finalizerQueue.mergeFrom(std::move(localQueue));
+        });
+        // The single-object store is not safe to sweep from several threads.
         auto sweepHandle = gcHandle.sweep();
-        for (int blockSize = 0; blockSize <= FixedBlockPage::MAX_BLOCK_SIZE; ++blockSize) {
-            fixedBlockPages_[blockSize].Sweep(sweepHandle, finalizerQueue);
-        }
-        nextFitPages_.Sweep(sweepHandle, finalizerQueue);
         singleObjectPages_.Sweep(sweepHandle, finalizerQueue);
     }
     CustomAllocDebug("Heap: before extra sweep FinalizerQueue size == %zu", finalizerQueue.size());
