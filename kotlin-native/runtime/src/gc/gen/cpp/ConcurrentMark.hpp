@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <vector>
 
 #include "GCStatistics.hpp"
 #include "ManuallyScoped.hpp"
@@ -17,6 +19,7 @@
 #include "ThreadRegistry.hpp"
 #include "Utils.hpp"
 #include "concurrent/Once.hpp"
+#include "concurrent/ScopedThread.hpp"
 
 
 namespace kotlin::gc::mark {
@@ -130,7 +133,10 @@ public:
     // young objects referenced from the old generation.
     void markYoungInSTW(GCHandle gcHandle, const std::function<void(ParallelProcessor::Worker&)>& markRememberedSets);
 
-    void requestShutdown() { /* no-op */ }
+    ~ConcurrentMark();
+
+    // Kore: stops the young-collection mark helpers.
+    void requestShutdown();
 
     /**
      * Weak reference reads may be mutually exclusive with certain parts of mark oprocess.
@@ -159,6 +165,20 @@ private:
     void endMarkingEpoch();
 
     void resetMutatorFlags();
+
+    // Kore: helper threads that join the young collection's mark (world stopped), parked between collections.
+    void startYoungMarkHelpers(GCHandle gcHandle) noexcept;
+    void waitYoungMarkHelpers() noexcept;
+    void youngMarkHelperBody() noexcept;
+
+    std::vector<ScopedThread> youngMarkHelpers_;
+    std::mutex youngMarkHelpersMutex_;
+    std::condition_variable youngMarkHelpersStart_;
+    std::condition_variable youngMarkHelpersDone_;
+    uint64_t youngMarkRound_ = 0;
+    size_t youngMarkHelpersRunning_ = 0;
+    bool youngMarkHelpersShutdown_ = false;
+    GCHandle youngMarkHandle_ = GCHandle::invalid();
 
     GCHandle gcHandle_ = GCHandle::invalid();
     std::optional<mm::ThreadRegistry::Iterable> lockedMutatorsList_;
