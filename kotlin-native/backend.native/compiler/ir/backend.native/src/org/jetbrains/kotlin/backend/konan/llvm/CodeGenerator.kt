@@ -528,11 +528,10 @@ internal class StackLocalsManagerImpl(
             }
 
             if (!refsOnly) {
-                val bodyPtr = ptrToInt(stackLocal.stackAllocationPtr, codegen.intPtrType)
                 val bodySize = LLVMSizeOfTypeInBits(codegen.llvmTargetData, type).toInt() / 8
                 val serviceInfoSize = runtime.pointerSize
-                val serviceInfoSizeLlvm = LLVMConstInt(codegen.intPtrType, serviceInfoSize.toLong(), 1)!!
-                val bodyWithSkippedServiceInfoPtr = intToPtr(add(bodyPtr, serviceInfoSizeLlvm), llvm.pointerType)
+                // Kore: an address computation the optimizer can see through (not through integers).
+                val bodyWithSkippedServiceInfoPtr = gep(llvm.int8Type, stackLocal.stackAllocationPtr, llvm.int32(serviceInfoSize))
                 memset(bodyWithSkippedServiceInfoPtr, 0, bodySize - serviceInfoSize)
             }
         }
@@ -892,7 +891,13 @@ internal abstract class FunctionGenerationContext(
     }
 
     fun allocInstance(typeInfo: LLVMValueRef, lifetime: Lifetime, resultSlot: LLVMValueRef?) : LLVMValueRef =
-            call(llvm.allocInstanceFunction, listOf(typeInfo), lifetime, resultSlot = resultSlot)
+            call(llvm.allocInstanceFunction, listOf(typeInfo), lifetime, resultSlot = resultSlot).also { allocation ->
+                // Kore: kept a call until the object scalar replacement LLVM pass has run, which inlines it afterwards.
+                if (context.shouldOptimize() && LLVMIsACallInst(allocation) != null) {
+                    LLVMAddCallSiteAttribute(allocation, LLVMAttributeFunctionIndex,
+                            createLlvmEnumAttribute(LLVMGetTypeContext(LLVMTypeOf(allocation))!!, LlvmFunctionAttribute.NoInline.asAttributeKindId()))
+                }
+            }
 
     fun allocInstance(irClass: IrClass, lifetime: Lifetime, resultSlot: LLVMValueRef?) =
         if (lifetime == Lifetime.STACK)
@@ -1355,7 +1360,7 @@ internal abstract class FunctionGenerationContext(
 
         appendingTo(prologueBb) {
             val slots = if (needSlotsPhi || needCleanupLandingpadAndLeaveFrame)
-                LLVMBuildArrayAlloca(builder, llvm.pointerType, llvm.int32(slotCount), "")!!
+                LLVMBuildArrayAlloca(builder, llvm.pointerType, llvm.int32(slotCount), "kore.frame")!!
             else
                 llvm.kNull
             if (needSlots || needCleanupLandingpadAndLeaveFrame) {

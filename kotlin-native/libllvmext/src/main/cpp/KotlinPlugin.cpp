@@ -6,6 +6,7 @@
 
 #include "Passes/HideSymbols.h"
 #include "Passes/LoopSafepoints.h"
+#include "Passes/ObjectScalarReplacement.h"
 #include "Passes/PrepareStackProtector.h"
 #include "Passes/PrepareThreadSanitizer.h"
 
@@ -69,10 +70,23 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
             // before they are vectorized.
             PB.registerScalarOptimizerLateEPCallback(
                 [](FunctionPassManager &PM, OptimizationLevel) {
+                  // Replace objects by their fields while allocations are
+                  // still calls.
+                  PM.addPass(ObjectScalarReplacementPass());
                   PM.addPass(LoopSafepointsPass());
                   // Then split loops into one without array bounds checks and
                   // (rarely run) ones with them, so that they can be vectorized.
                   PM.addPass(IRCEPass());
+                });
+            // Kore: allocations stay calls until all inlining into their
+            // functions is done.
+            PB.registerOptimizerEarlyEPCallback(
+                [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
+                  PM.addPass(InlinePendingAllocationsPass());
+                });
+            PB.registerFullLinkTimeOptimizationEarlyEPCallback(
+                [](ModulePassManager &PM, OptimizationLevel) {
+                  PM.addPass(InlinePendingAllocationsPass());
                 });
             // The LTO pipeline has no late scalar optimizer extension point, but
             // it inlines too: remove the prologue polls of callees it inlines.
