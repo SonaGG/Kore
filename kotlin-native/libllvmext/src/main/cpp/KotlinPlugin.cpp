@@ -5,6 +5,7 @@
 #include "KotlinPlugin.h"
 
 #include "Passes/HideSymbols.h"
+#include "Passes/LoopSafepoints.h"
 #include "Passes/PrepareStackProtector.h"
 #include "Passes/PrepareThreadSanitizer.h"
 
@@ -63,9 +64,19 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   }
                   return false;
                 });
+            // Kore: decide on loop safepoints once loops are simplified, but
+            // before they are vectorized.
+            PB.registerScalarOptimizerLateEPCallback(
+                [](FunctionPassManager &PM, OptimizationLevel) {
+                  PM.addPass(LoopSafepointsPass());
+                });
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &PM,
                    ArrayRef<PassBuilder::PipelineElement>) {
+                  if (parsePass(Name, "kotlin-loop-safepoints")) {
+                    PM.addPass(LoopSafepointsPass());
+                    return true;
+                  }
                   if (parsePass(Name, "kotlin-tsan")) {
                     PM.addPass(PrepareThreadSanitizerPass());
                     return true;

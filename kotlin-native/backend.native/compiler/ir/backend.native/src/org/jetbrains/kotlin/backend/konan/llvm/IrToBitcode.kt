@@ -1195,6 +1195,14 @@ internal class CodeGeneratorVisitor(
     }
     //-------------------------------------------------------------------------//
 
+    // Kore: the kotlin-loop-safepoints LLVM pass removes the poll from bounded innermost loops and inlines the others, so
+    // keep it a call until then.
+    private fun loopSafePoint() {
+        val poll = call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
+        LLVMAddCallSiteAttribute(poll, LLVMAttributeFunctionIndex,
+                createLlvmEnumAttribute(LLVMGetTypeContext(LLVMTypeOf(poll))!!, LlvmFunctionAttribute.NoInline.asAttributeKindId()))
+    }
+
     private fun evaluateWhileLoop(loop: IrWhileLoop): LLVMValueRef {
         val loopScope = LoopScope(loop)
         using(loopScope) {
@@ -1206,7 +1214,7 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.condBr(condition, loopBody, loopScope.loopExit)
 
             functionGenerationContext.positionAtEnd(loopBody)
-            call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
+            loopSafePoint()
             loop.body?.generate()
 
             functionGenerationContext.br(loopScope.loopCheck)
@@ -1226,7 +1234,7 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.br(loopBody)
 
             functionGenerationContext.positionAtEnd(loopBody)
-            call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
+            loopSafePoint()
             loop.body?.generate()
             functionGenerationContext.br(loopScope.loopCheck)
 
