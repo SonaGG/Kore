@@ -5,12 +5,19 @@
 
 package org.jetbrains.kotlin.backend.konan
 
+import llvm.LLVMContextCreate
+import llvm.LLVMContextDispose
+import llvm.LLVMDisposeModule
+import llvm.LLVMKotlinSplitModule
 import org.jetbrains.kotlin.backend.konan.driver.NativeBackendPhaseContext
+import org.jetbrains.kotlin.backend.konan.llvm.parseBitcodeFile
 import org.jetbrains.kotlin.config.nativeBinaryOptions.BinaryOptions
 import org.jetbrains.kotlin.konan.config.overrideClangOptions
 import org.jetbrains.kotlin.konan.exec.Command
 import org.jetbrains.kotlin.konan.target.*
 import java.io.File
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 typealias ObjectFile = String
 
@@ -85,4 +92,70 @@ internal class BitcodeCompiler(
                 is ClangFlags -> clang(configurables, bitcodeFile, objectFile)
                 else -> error("Unsupported configurables kind: ${configurables::class.simpleName}!")
             }
+
+    /**
+     * Kore: compile [bitcodeFile] to object files. Large optimized executables are split into partitions which are
+     * compiled to machine code by parallel clang processes; otherwise this is [makeObjectFile] into [objectFile].
+     */
+    fun makeObjectFiles(bitcodeFile: File, objectFile: File): List<File> {
+        val configurables = platform.configurables
+        val partitions = if (configurables is ClangFlags) codegenPartitions(configurables, bitcodeFile) else 1
+        if (partitions <= 1) {
+            makeObjectFile(bitcodeFile, objectFile)
+            return listOf(objectFile)
+        }
+        configurables as ClangFlags
+        val prefix = objectFile.absoluteFile.normalize().path + ".part"
+        val written = splitBitcode(bitcodeFile, partitions, prefix)
+        if (written <= 0) {
+            makeObjectFile(bitcodeFile, objectFile)
+            return listOf(objectFile)
+        }
+        val parts = (0 until written).map { File("$prefix$it.bc") to File("$prefix$it.o") }
+        val executor = Executors.newFixedThreadPool(parts.size)
+        try {
+            parts.map { part -> executor.submit { clang(configurables, part.first, part.second) } }.forEach {
+                try {
+                    it.get()
+                } catch (e: ExecutionException) {
+                    throw e.cause ?: e
+                }
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+        parts.forEach { it.first.delete() }
+        return parts.map { it.second }
+    }
+
+    private fun codegenPartitions(configurables: ClangFlags, bitcodeFile: File): Int {
+        val requested = config.codegenPartitions.toInt()
+        if (requested == 1 || !optimize) return 1
+        // Externalized locals would be exported from a DLL by MinGW's automatic export, and caches and libraries are
+        // linked into other binaries, so only split executables.
+        if (config.produce != CompilerOutputKind.PROGRAM) return 1
+        if (configurables is AppleConfigurables && config.configuration.get(BinaryOptions.compileBitcodeWithXcodeLlvm) == true) return 1
+        if (requested > 1) return requested
+        if (bitcodeFile.length() < MIN_SPLIT_BITCODE_BYTES) return 1
+        return Runtime.getRuntime().availableProcessors().coerceIn(1, MAX_AUTO_PARTITIONS)
+    }
+
+    private fun splitBitcode(bitcodeFile: File, partitions: Int, prefix: String): Int {
+        val llvmContext = LLVMContextCreate()!!
+        try {
+            val module = parseBitcodeFile(context, context.diagnosticReporter, llvmContext, bitcodeFile.absoluteFile.normalize().path)
+            try {
+                return LLVMKotlinSplitModule(module, partitions, prefix)
+            } finally {
+                LLVMDisposeModule(module)
+            }
+        } finally {
+            LLVMContextDispose(llvmContext)
+        }
+    }
+
+    private companion object {
+        const val MIN_SPLIT_BITCODE_BYTES = 256L * 1024
+        const val MAX_AUTO_PARTITIONS = 8
+    }
 }

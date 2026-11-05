@@ -7,12 +7,15 @@
 #include "KotlinPlugin.h"
 #include "PassesProfileHandler.h"
 
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/SplitModule.h"
 
 using namespace llvm;
 using namespace llvm::kotlin;
@@ -163,4 +166,32 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
   }
 
   return LLVMErrorSuccess;
+}
+
+int LLVMKotlinSplitModule(LLVMModuleRef M, unsigned Partitions,
+                          const char *PathPrefix) {
+  Module *Mod = unwrap(M);
+  // SplitModule externalizes locals referenced across partitions under their
+  // own names, which may clash with external definitions of other objects
+  // (e.g. internalized copies of libstdc++ functions), so make them unique.
+  for (GlobalValue &GV : Mod->global_values()) {
+    if (GV.hasLocalLinkage() && GV.hasName())
+      GV.setName(GV.getName() + ".kore");
+  }
+  int Written = 0;
+  bool Failed = false;
+  SplitModule(*Mod, Partitions, [&](std::unique_ptr<Module> Part) {
+    if (Failed)
+      return;
+    std::error_code EC;
+    raw_fd_ostream OS(std::string(PathPrefix) + std::to_string(Written) + ".bc",
+                      EC, sys::fs::OF_None);
+    if (EC) {
+      Failed = true;
+      return;
+    }
+    WriteBitcodeToFile(*Part, OS);
+    ++Written;
+  });
+  return Failed ? -1 : Written;
 }

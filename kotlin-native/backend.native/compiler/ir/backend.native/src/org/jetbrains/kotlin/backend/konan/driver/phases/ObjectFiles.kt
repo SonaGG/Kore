@@ -15,8 +15,9 @@ internal data class ObjectFilesPhaseInput(
         val objectFile: File,
 )
 
-internal val ObjectFilesPhase = createSimpleNamedCompilerPhase<NativeBackendPhaseContext, ObjectFilesPhaseInput>(
+internal val ObjectFilesPhase = createSimpleNamedCompilerPhase<NativeBackendPhaseContext, ObjectFilesPhaseInput, List<File>>(
         name = "ObjectFiles",
+        outputIfNotEnabled = { _, _, _, input -> listOf(input.objectFile) },
 ) { context, input ->
-    BitcodeCompiler(context).makeObjectFile(input.bitcodeFile, input.objectFile)
+    BitcodeCompiler(context).makeObjectFiles(input.bitcodeFile, input.objectFile)
 }

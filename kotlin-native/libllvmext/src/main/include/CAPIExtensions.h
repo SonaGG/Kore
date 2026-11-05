@@ -35,6 +35,13 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
                                  const char *SaveIRAfterPasses,
                                  const char *SaveIRDirectory);
 
+/// Kore: splits `M` into `Partitions` modules for parallel code generation and
+/// writes partition `i` as bitcode to `<PathPrefix><i>.bc`. Local symbols
+/// referenced across partitions are externalized with hidden visibility, so `M`
+/// is modified. Returns the number of files written, or -1 on an I/O error.
+int LLVMKotlinSplitModule(LLVMModuleRef M, unsigned Partitions,
+                          const char *PathPrefix);
+
 LLVM_C_EXTERN_C_END
 
 #endif

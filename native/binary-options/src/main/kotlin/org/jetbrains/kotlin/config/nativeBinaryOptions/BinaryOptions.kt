@@ -59,6 +59,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: young generation size in MiB for gc=gen (0 or unset: runtime default).
     val gcYoungGenerationSize by uintOption()
 
+    // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
+    val codegenPartitions by uintOption()
+
     val concurrentWeakSweep by booleanOption()
 
     val concurrentMarkMaxIterations by uintOption()
