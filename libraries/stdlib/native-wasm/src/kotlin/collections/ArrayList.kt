@@ -137,7 +137,15 @@ public actual constructor(initialCapacity: Int) : MutableList<E>, RandomAccess, 
     @IgnorableReturnValue
     actual override fun add(element: E): Boolean {
         checkIsMutable()
-        addAtInternal(length, element)
+        // Kore: appending with spare capacity needs no shifting and no capacity check.
+        val index = length
+        if (index < backing.size) {
+            registerModification()
+            backing[index] = element
+            length = index + 1
+            return true
+        }
+        addAtInternal(index, element)
         return true
     }
 
