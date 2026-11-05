@@ -48,10 +48,12 @@ public:
     void updateBoundaries(size_t aliveBytes) noexcept {
         if (config_.autoTune.load()) {
             double targetHeapBytes = static_cast<double>(aliveBytes) / config_.targetHeapUtilization;
-            if (auto youngGenerationBytes = config_.youngGenerationBytes.load(std::memory_order_relaxed); youngGenerationBytes > 0) {
-                // Kore: generational GC. Trigger the next (young) collection after `youngGenerationBytes` of allocation.
-                targetHeapBytes = static_cast<double>(aliveBytes) +
-                        static_cast<double>(youngGenerationBytes) / config_.heapTriggerCoefficient.load(std::memory_order_relaxed);
+            auto youngGenerationBytes = config_.youngGenerationBytes.load(std::memory_order_relaxed);
+            if (youngGenerationBytes > 0) {
+                // Kore: generational GC. Trigger the next (young) collection after `youngGenerationBytes` of allocation,
+                // and only make mutators assist (wait for the collection) after another `youngGenerationBytes`: the
+                // collection sweeps concurrently, and allocation must not stall on it.
+                targetHeapBytes = static_cast<double>(aliveBytes) + 2.0 * static_cast<double>(youngGenerationBytes);
             }
             if (!std::isfinite(targetHeapBytes)) {
                 // This shouldn't happen in practice: targetHeapUtilization is in (0, 1]. But in case it does, don't touch anything.
@@ -60,7 +62,11 @@ public:
             double minHeapBytes = static_cast<double>(config_.minHeapBytes.load(std::memory_order_relaxed));
             double maxHeapBytes = static_cast<double>(config_.maxHeapBytes.load(std::memory_order_relaxed));
             targetHeapBytes = std::min(std::max(targetHeapBytes, minHeapBytes), maxHeapBytes);
-            triggerHeapBytes_ = static_cast<size_t>(targetHeapBytes * config_.heapTriggerCoefficient.load(std::memory_order_relaxed));
+            if (youngGenerationBytes > 0) {
+                triggerHeapBytes_ = static_cast<size_t>(std::min(targetHeapBytes, static_cast<double>(aliveBytes) + static_cast<double>(youngGenerationBytes)));
+            } else {
+                triggerHeapBytes_ = static_cast<size_t>(targetHeapBytes * config_.heapTriggerCoefficient.load(std::memory_order_relaxed));
+            }
             config_.targetHeapBytes.store(static_cast<int64_t>(targetHeapBytes), std::memory_order_relaxed);
             targetHeapBytes_ = static_cast<size_t>(targetHeapBytes);
         } else {

@@ -40,7 +40,8 @@ struct GCSchedulerConfig {
     std::atomic<double> heapTriggerCoefficient = 0.9;
     // Kore: size of the young generation for generational GCs, 0 otherwise. When non-zero and `autoTune = true`, the
     // next collection is triggered after this many bytes have been allocated on top of the bytes alive after the
-    // previous collection, instead of when the heap has grown by `1 / targetHeapUtilization`.
+    // previous collection, instead of when the heap has grown by `1 / targetHeapUtilization`; mutators only assist
+    // (wait for the collection) after twice that many bytes.
     std::atomic<int64_t> youngGenerationBytes = 0;
     // See `mutatorAssists()`.
     std::atomic<std::underlying_type_t<MutatorAssists>> mutatorAssistsImpl =
