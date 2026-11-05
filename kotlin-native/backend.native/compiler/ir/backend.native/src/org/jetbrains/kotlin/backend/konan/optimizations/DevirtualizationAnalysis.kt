@@ -42,12 +42,12 @@ object DevirtualizationUnfoldFactors {
     /**
      * Maximum unfold factor for a devirtualized call via vtable.
      */
-    const val IR_DEVIRTUALIZED_VTABLE_CALL = 3
+    const val IR_DEVIRTUALIZED_VTABLE_CALL = 8
 
     /**
      * Maximum unfold factor for a devirtualized interface call.
      */
-    const val IR_DEVIRTUALIZED_ITABLE_CALL = 3
+    const val IR_DEVIRTUALIZED_ITABLE_CALL = 8
 
     /**
      * Maximum unfold factor for a devirtualized call during the call graph construction.
@@ -1113,6 +1113,18 @@ internal object DevirtualizationAnalysis {
             private val concreteClasses = arrayOfNulls<Node?>(allTypes.size)
             private val consts = arrayOfNulls<Node?>(allTypes.size)
             private val virtualTypeFilter = CustomBitSet().apply { set(VIRTUAL_TYPE_ID) }
+
+            // Kore: in a closed-world program without Objective-C interop, objects coming from outside of Kotlin code (the
+            // C++ runtime calling exported functions, external functions returning objects) are still objects of classes the
+            // program instantiates, so their types are known: the instantiated inheritors of the declared type. Treating them
+            // as Virtual instead made e.g. the `this` of every `Iterator.hasNext` implementation unknown (because of the
+            // runtime's `Kotlin_Iterator_hasNext`), and with it all the calls on fields of iterators.
+            private val closedWorldExternals = entryPoint != null && !context.config.target.family.isAppleFamily
+            private val externalValueNodes = mutableListOf<Pair<Node, DataFlowIR.Type>>()
+
+            private fun addExternalValue(node: Node, type: DataFlowIR.Type) {
+                if (closedWorldExternals) externalValueNodes += node to type else addEdge(constraintGraph.virtualNode, node)
+            }
             val instantiatingClasses = CustomBitSet()
 
             val bagOfEdges = LongArrayList()
@@ -1197,6 +1209,13 @@ internal object DevirtualizationAnalysis {
                             .filter { !it.isAbstract }
                             .forEach { addInstantiatingClass(it) }
                 } else {
+                    if (closedWorldExternals) {
+                        // Kore: the C++ runtime allocates objects of the classes whose type info it imports (strings, arrays,
+                        // boxes, ...), and passes them to Kotlin code, see [addExternalValue].
+                        symbolTable.classMap.forEach { [irClass, type] ->
+                            if (irClass.hasAnnotation(RuntimeNames.exportTypeInfoAnnotation) && !type.isAbstract) addInstantiatingClass(type)
+                        }
+                    }
                     // String arguments are implicitly put into the <args> array parameter of <main>.
                     addInstantiatingClass(symbolTable.mapType(context.irBuiltIns.stringType))
                     addEdge(concreteClass(symbolTable.mapType(context.irBuiltIns.stringType)),
@@ -1234,6 +1253,13 @@ internal object DevirtualizationAnalysis {
                     }
                 }
 
+                // All instantiated classes are known now.
+                for ([node, type] in externalValueNodes) {
+                    forEachBitInBoth(typeHierarchy.inheritorsOf(type), instantiatingClasses) {
+                        addEdge(concreteClass(allTypes[it]), node)
+                    }
+                }
+
                 suitableTypes.forEach {
                     it?.and(instantiatingClasses)
                     it?.set(VIRTUAL_TYPE_ID)
@@ -1249,11 +1275,10 @@ internal object DevirtualizationAnalysis {
                     // Exported function from the current module.
                     symbol.parameters.forEachIndexed { index, parameter ->
                         val parameterType = parameter.type
-                        val node = if (!parameterType.isFinal)
-                            constraintGraph.virtualNode // TODO: OBJC-INTEROP-GENERATED-CLASSES
+                        if (!parameterType.isFinal)
+                            addExternalValue(parameters[index], parameterType) // TODO: OBJC-INTEROP-GENERATED-CLASSES
                         else
-                            concreteClass(parameterType)
-                        addEdge(node, parameters[index])
+                            addEdge(concreteClass(parameterType), parameters[index])
                     }
                 }
 
@@ -1363,7 +1388,7 @@ internal object DevirtualizationAnalysis {
                             addInstantiatingClass(returnType)
                             addEdge(concreteClass(returnType), fictitiousReturnNode)
                         } else {
-                            addEdge(constraintGraph.virtualNode, fictitiousReturnNode)
+                            addExternalValue(fictitiousReturnNode, returnType)
                             // TODO: Unconservative way - when we can use it?
                             // TODO: OBJC-INTEROP-GENERATED-CLASSES
 //                                typeHierarchy.inheritorsOf(returnType)
