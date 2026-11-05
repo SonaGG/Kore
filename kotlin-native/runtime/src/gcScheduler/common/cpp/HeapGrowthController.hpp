@@ -48,8 +48,11 @@ public:
     void updateBoundaries(size_t aliveBytes) noexcept {
         if (config_.autoTune.load()) {
             double targetHeapBytes = static_cast<double>(aliveBytes) / config_.targetHeapUtilization;
-            auto youngGenerationBytes = config_.youngGenerationBytes.load(std::memory_order_relaxed);
+            double youngGenerationBytes = static_cast<double>(config_.youngGenerationBytes.load(std::memory_order_relaxed));
             if (youngGenerationBytes > 0) {
+                // Kore: a young generation that grows with the heap (to half of the alive bytes): with a large alive
+                // set, a small young generation means frequent collections that trace a lot to free little.
+                youngGenerationBytes = std::max(youngGenerationBytes, static_cast<double>(aliveBytes) / 2);
                 // Kore: generational GC. Trigger the next (young) collection after `youngGenerationBytes` of allocation,
                 // and only make mutators assist (wait for the collection) after another `youngGenerationBytes`: the
                 // collection sweeps concurrently, and allocation must not stall on it.
