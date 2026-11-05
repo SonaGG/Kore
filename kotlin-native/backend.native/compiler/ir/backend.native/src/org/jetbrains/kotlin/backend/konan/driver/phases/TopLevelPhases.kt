@@ -522,6 +522,10 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(PropertyAccessorInlinePhase, it, disable = !optimize)
         runAndMeasurePhase(InlineClassPropertyAccessorsPhase, it, disable = !optimize)
     }
+    if (runGlobalOptimizations) {
+        // Kore: before the devirtualization analysis, which then resolves the calls this pass guards.
+        org.jetbrains.kotlin.backend.konan.optimizations.GenericSpecialization(context.context, module).run()
+    }
     var moduleDFG = runAndMeasurePhase(BuildDFGPhase, module, disable = !runGlobalOptimizations)
     runAndMeasurePhase(RemoveRedundantCallsToStaticInitializersPhase, RedundantCallsInput(moduleDFG, module), disable = !enablePreCodegenInliner)
     runAndMeasurePhase(PreCodegenInlinerPhase, PreCodegenInlinerInput(module, moduleDFG), disable = !enablePreCodegenInliner)
