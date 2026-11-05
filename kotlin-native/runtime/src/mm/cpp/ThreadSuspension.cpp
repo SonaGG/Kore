@@ -171,7 +171,7 @@ uintptr_t kotlin::mm::ThreadSuspensionData::currentThreadStackBase() noexcept {
     return reinterpret_cast<uintptr_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
 #elif KONAN_APPLE
     return reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
-#elif KONAN_LINUX
+#elif KONAN_LINUX || KONAN_ANDROID
     pthread_attr_t attributes;
     void* address = nullptr;
     size_t size = 0;

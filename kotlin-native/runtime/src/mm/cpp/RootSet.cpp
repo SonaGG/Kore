@@ -5,14 +5,20 @@
 
 #include "RootSet.hpp"
 
+#include "CompilerConstants.hpp"
 #include "KAssert.h"
 #include "GlobalData.hpp"
 #include "ThreadData.hpp"
 
 using namespace kotlin;
 
+// Kore: with conservative stack scanning the whole stack is scanned, including the frames of code compiled with
+// shadow stack frames (e.g. cached libraries). The frame chain is not walked: code without frames does not restore it
+// when it catches an exception, so it may point into frames that are gone.
 mm::ThreadRootSet::Iterator::Iterator(begin_t, ThreadRootSet& owner) noexcept :
-    owner_(owner), phase_(Phase::kStack), stackIterator_(owner_.stack_.begin()) {
+    owner_(owner),
+    phase_(Phase::kStack),
+    stackIterator_(compiler::conservativeStacks() ? owner_.stack_.end() : owner_.stack_.begin()) {
     Init();
 }
 

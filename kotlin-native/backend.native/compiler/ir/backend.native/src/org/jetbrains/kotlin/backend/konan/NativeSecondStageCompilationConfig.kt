@@ -246,9 +246,15 @@ class NativeSecondStageCompilationConfig(
     val gcNurserySize: UInt
         get() = if (gc == GC.GENERATIONAL_MARK_AND_SWEEP) configuration.get(BinaryOptions.gcNurserySize) ?: 0u else 0u
 
-    // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively.
+    // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively. On by default where the
+    // runtime can find the stack bounds and save the registers (64-bit x86 and ARM, except arm64_32).
     val conservativeStacks: Boolean
-        get() = configuration.get(BinaryOptions.conservativeStacks) ?: false
+        get() = configuration.get(BinaryOptions.conservativeStacks) ?: conservativeStacksSupported
+
+    private val conservativeStacksSupported: Boolean
+        get() = (target.architecture == Architecture.X64 || target.architecture == Architecture.ARM64) &&
+                target != KonanTarget.WATCHOS_ARM64 &&
+                (target.family == Family.MINGW || target.family == Family.LINUX || target.family == Family.ANDROID || target.family.isAppleFamily)
 
     // Kore: tag field accesses with (clang compatible) type-based alias analysis metadata.
     val tbaa: Boolean
