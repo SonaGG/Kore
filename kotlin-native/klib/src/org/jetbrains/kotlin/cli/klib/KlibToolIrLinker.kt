@@ -1,0 +1,63 @@
+/*
+ * Copyright 2010-2024 JetBrains s.r.o. and Kotlin Programming Language contributors.
+ * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.
+ */
+
+package org.jetbrains.kotlin.cli.klib
+
+import org.jetbrains.kotlin.backend.common.linkage.partial.PartialLinkageSupportForLinker
+import org.jetbrains.kotlin.backend.common.overrides.IrLinkerFakeOverrideProvider
+import org.jetbrains.kotlin.backend.common.serialization.BasicIrModuleDeserializer
+import org.jetbrains.kotlin.backend.common.serialization.DeserializationStrategy
+import org.jetbrains.kotlin.backend.common.serialization.IrModuleDeserializer
+import org.jetbrains.kotlin.backend.common.serialization.KotlinIrLinker
+import org.jetbrains.kotlin.backend.konan.serialization.KonanManglerIr
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor
+import org.jetbrains.kotlin.ir.util.KotlinMangler
+import org.jetbrains.kotlin.ir.util.SymbolTable
+import org.jetbrains.kotlin.library.KotlinAbiVersion
+import org.jetbrains.kotlin.library.KotlinLibrary
+
+internal class KlibToolIrLinker(
+    output: KlibToolOutput,
+    module: ModuleDescriptor,
+    symbolTable: SymbolTable,
+) : KotlinIrLinker(module, symbolTable, exportedDependencies = emptyList(), errorCallback = output::logError) {
+    override val irMangler: KotlinMangler.IrMangler = KonanManglerIr
+
+    override val fakeOverrideBuilder = IrLinkerFakeOverrideProvider(
+        linker = this,
+        symbolTable = symbolTable,
+        mangler = irMangler,
+        friendModules = emptyMap(), // TODO(KT-62534) can be removed when ModuleDescriptorImpl.shouldSeeInternalsOf is fixed
+        partialLinkageSupport = PartialLinkageSupportForLinker.DISABLED,
+    )
+
+    override val returnUnboundSymbolsIfSignatureNotFound get() = true
+
+    override fun createModuleDeserializer(
+        moduleDescriptor: ModuleDescriptor,
+        klib: KotlinLibrary?,
+        strategyResolver: (String) -> DeserializationStrategy,
+    ): IrModuleDeserializer = KlibToolModuleDeserializer(
+        module = moduleDescriptor,
+        klib = klib ?: error("Expecting kotlin library for $moduleDescriptor"),
+        strategyResolver = strategyResolver
+    )
+
+    override fun isBuiltInModule(moduleDescriptor: ModuleDescriptor) = false
+
+    private inner class KlibToolModuleDeserializer(
+        module: ModuleDescriptor,
+        klib: KotlinLibrary,
+        strategyResolver: (String) -> DeserializationStrategy,
+    ) : BasicIrModuleDeserializer(
+        linker = this,
+        moduleDescriptor = module,
+        strategyResolver = strategyResolver,
+        klib = klib,
+        libraryAbiVersion = klib.versions.abiVersion ?: KotlinAbiVersion.CURRENT,
+        allowErrorNodes = true,
+        deserializeTypeAliases = true,
+    )
+}

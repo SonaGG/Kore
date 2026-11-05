@@ -1,0 +1,3 @@
+class UsualClass {
+    fun foo() {}
+}

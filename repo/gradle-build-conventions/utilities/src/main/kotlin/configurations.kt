@@ -1,0 +1,39 @@
+/*
+ * Copyright 2010-2025 JetBrains s.r.o. and Kotlin Programming Language contributors.
+ * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.
+ */
+
+import org.gradle.api.Action
+import org.gradle.api.NamedDomainObjectContainer
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyScopeConfiguration
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ResolvableConfiguration
+import org.gradle.api.artifacts.dsl.DependencyHandler
+
+const val NATIVE_TEST_DEPENDENCY_KLIBS_CONFIGURATION_NAME = "testDependencyLibraryKlibs"
+
+val NamedDomainObjectContainer<Configuration>.embedded: NamedDomainObjectProvider<Configuration>
+    get() = named("embedded")
+
+fun DependencyHandler.embedded(dependencyNotation: Any): Dependency? =
+    add("embedded", dependencyNotation)
+
+
+fun Project.getOrCreateConfiguration(taskName: String, body: Configuration.() -> Unit): Configuration {
+    return configurations.findByName(taskName)?.apply { body() } ?: configurations.create(taskName) { body() }
+}
+
+fun ConfigurationContainer.dependencyScopeNamedOrRegister(
+    name: String,
+    action: DependencyScopeConfiguration.() -> Unit,
+): NamedDomainObjectProvider<out Configuration> = if (names.contains(name)) named(name) else this.dependencyScope(name, action)
+
+fun ConfigurationContainer.resolvableNamedOrRegister(
+    name: String,
+    action: ResolvableConfiguration.() -> Unit,
+): NamedDomainObjectProvider<out Configuration> = if (names.contains(name)) named(name) else this.resolvable(name, action)
