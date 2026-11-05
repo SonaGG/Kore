@@ -74,6 +74,12 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // (rarely run) ones with them, so that they can be vectorized.
                   PM.addPass(IRCEPass());
                 });
+            // The LTO pipeline has no late scalar optimizer extension point, but
+            // it inlines too: remove the prologue polls of callees it inlines.
+            PB.registerPeepholeEPCallback(
+                [](FunctionPassManager &PM, OptimizationLevel) {
+                  PM.addPass(LoopSafepointsPass(/*PrologueOnly=*/true));
+                });
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &PM,
                    ArrayRef<PassBuilder::PipelineElement>) {

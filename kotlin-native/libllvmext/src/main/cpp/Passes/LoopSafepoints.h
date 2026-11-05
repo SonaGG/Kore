@@ -18,7 +18,15 @@ namespace llvm::kotlin {
 /// removes the function prologue polls of inlined callees.
 class LoopSafepointsPass : public PassInfoMixin<LoopSafepointsPass> {
 public:
+  /// With `PrologueOnly`, only removes the prologue polls of inlined callees,
+  /// for use before loops are simplified.
+  explicit LoopSafepointsPass(bool PrologueOnly = false)
+      : PrologueOnly(PrologueOnly) {}
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+private:
+  bool PrologueOnly;
 };
 
 } // namespace llvm::kotlin

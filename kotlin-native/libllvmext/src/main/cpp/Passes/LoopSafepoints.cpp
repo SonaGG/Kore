@@ -77,6 +77,8 @@ static bool isBoundedLoop(Loop &L, ScalarEvolution &SE) {
 PreservedAnalyses LoopSafepointsPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
   bool Changed = removeInlinedPrologueSafepoints(F);
+  if (PrologueOnly)
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
   SmallVector<CallBase *> Polls;
   for (Instruction &I : instructions(F)) {
     if (isPendingLoopSafepoint(I))
