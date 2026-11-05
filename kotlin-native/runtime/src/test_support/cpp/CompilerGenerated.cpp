@@ -101,10 +101,10 @@ extern const TypeInfo* theUnitTypeInfo = theUnitTypeInfoHolder.typeInfo();
 extern const TypeInfo* theCleanerImplTypeInfo = theCleanerImplTypeInfoHolder.typeInfo();
 extern const TypeInfo* theRegularWeakReferenceImplTypeInfo = theRegularWeakReferenceImplTypeInfoHolder.typeInfo();
 
-extern const ArrayHeader theEmptyArray = {theArrayTypeInfoHolder.typeInfo(), /* element count */ 0};
+extern const ArrayHeader theEmptyArray = {theArrayTypeInfoHolder.typeInfo(), /* element count */ ArrayLength{ArrayLengthRep{0}}};
 
 static StringHeader theEmptyStringImpl =
-    {theStringTypeInfoHolder.typeInfo(), /* element count */ StringHeader::extraLength(0) / sizeof(KChar), /* hashcode */ 0, /* flags */ 0};
+    {theStringTypeInfoHolder.typeInfo(), /* element count */ ArrayLength{static_cast<ArrayLengthRep>(StringHeader::extraLength(0) / sizeof(KChar))}, /* hashcode */ 0, /* flags */ 0};
 
 OBJ_GETTER0(TheEmptyString) {
     RETURN_OBJ(reinterpret_cast<KRef>(&theEmptyStringImpl));
