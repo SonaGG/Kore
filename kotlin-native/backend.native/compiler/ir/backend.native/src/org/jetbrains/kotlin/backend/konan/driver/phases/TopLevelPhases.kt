@@ -519,13 +519,22 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(PropertyAccessorInlinePhase, it, disable = !optimize)
         runAndMeasurePhase(InlineClassPropertyAccessorsPhase, it, disable = !optimize)
     }
-    val moduleDFG = runAndMeasurePhase(BuildDFGPhase, module, disable = !runGlobalOptimizations)
+    var moduleDFG = runAndMeasurePhase(BuildDFGPhase, module, disable = !runGlobalOptimizations)
     runAndMeasurePhase(RemoveRedundantCallsToStaticInitializersPhase, RedundantCallsInput(moduleDFG, module), disable = !enablePreCodegenInliner)
     runAndMeasurePhase(PreCodegenInlinerPhase, PreCodegenInlinerInput(module, moduleDFG), disable = !enablePreCodegenInliner)
     runAndMeasurePhase(DevirtualizationAnalysisPhase, DevirtualizationAnalysisInput(module, moduleDFG), disable = !runGlobalOptimizations)
     // KT-72336: This is more optimal but contradicts with the pre-codegen inliner.
     runAndMeasurePhase(RemoveRedundantCallsToStaticInitializersPhase, RedundantCallsInput(moduleDFG, module), disable = enablePreCodegenInliner || !runGlobalOptimizations)
     runAndMeasurePhase(DevirtualizationPhase, DevirtualizationInput(module, moduleDFG), disable = !runGlobalOptimizations)
+    if (runGlobalOptimizations) {
+        // Kore: a second round. The analysis merges the return values of a virtual call over all possible callees in
+        // the program, so values returned by calls that were only devirtualized above (e.g. the iterator returned by
+        // `list.iterator()`) still look polymorphic. Re-analyzing the devirtualized IR resolves the calls on them
+        // (e.g. `hasNext()`/`next()`), which then become direct and inlinable.
+        moduleDFG = runAndMeasurePhase(BuildDFGPhase, module)
+        runAndMeasurePhase(DevirtualizationAnalysisPhase, DevirtualizationAnalysisInput(module, moduleDFG))
+        runAndMeasurePhase(DevirtualizationPhase, DevirtualizationInput(module, moduleDFG))
+    }
     module.files.forEach {
         runAndMeasurePhase(RedundantCoercionsCleaningPhase, it)
         // depends on redundantCoercionsCleaningPhase
