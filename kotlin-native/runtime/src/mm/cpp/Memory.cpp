@@ -151,6 +151,10 @@ extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRefInObject(ObjHead
     ref.store(value);
 }
 
+extern "C" RUNTIME_NOTHROW void CopyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, uint32_t count) {
+    gc::copyHeapRefsInObject(holder, destination, source, count);
+}
+
 extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) {
     mm::RefAccessor<false>{location}.storeAtomic(const_cast<ObjHeader*>(object), std::memory_order_seq_cst);
 }

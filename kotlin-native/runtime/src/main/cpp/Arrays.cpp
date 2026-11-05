@@ -158,17 +158,10 @@ void Kotlin_Array_copyImpl(KConstRef thiz, KInt fromIndex,
       toIndex < 0 || static_cast<uint32_t>(count) + toIndex > destinationArray->count_) {
     ThrowArrayIndexOutOfBoundsException();
   }
-    if (fromIndex >= toIndex) {
-      for (int index = 0; index < count; index++) {
-        UpdateHeapRefInObject(destination, ArrayAddressOfElementAt(destinationArray, toIndex + index),
-                        *ArrayAddressOfElementAt(array, fromIndex + index));
-      }
-    } else {
-      for (int index = count - 1; index >= 0; index--) {
-        UpdateHeapRefInObject(destination, ArrayAddressOfElementAt(destinationArray, toIndex + index),
-                        *ArrayAddressOfElementAt(array, fromIndex + index));
-      }
-    }
+  if (count > 0) {
+    CopyHeapRefsInObject(destination, ArrayAddressOfElementAt(destinationArray, toIndex),
+                         ArrayAddressOfElementAt(array, fromIndex), count);
+  }
 }
 
 // Arrays.kt

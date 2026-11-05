@@ -87,6 +87,23 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::D
     barriers::beforeHeapRefUpdate(ref, value, false);
 }
 
+// Kore: element by element, as the snapshot-at-the-beginning barrier needs every overwritten value.
+void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept {
+    if (destination <= source) {
+        for (size_t i = 0; i < count; ++i) {
+            mm::DirectRefAccessor ref{destination + i};
+            beforeHeapRefUpdateInObject(holder, ref, source[i]);
+            ref.store(source[i]);
+        }
+    } else {
+        for (size_t i = count; i > 0; --i) {
+            mm::DirectRefAccessor ref{destination + i - 1};
+            beforeHeapRefUpdateInObject(holder, ref, source[i - 1]);
+            ref.store(source[i - 1]);
+        }
+    }
+}
+
 PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(gc::barriers::weakRefReadBarrier(weakReferee));
 }

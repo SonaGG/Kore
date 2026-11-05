@@ -233,6 +233,8 @@ void UpdateHeapRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHRO
 // Kore: updates a reference field or element `location` of `holder` (a heap, stack or permanent object). Same as
 // UpdateHeapRef, but lets the GC barrier use the holder (e.g. to skip stores into young objects).
 void UpdateHeapRefInObject(ObjHeader* holder, ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
+// Kore: `count` UpdateHeapRefInObject stores copying `source` to `destination` (possibly overlapping), in bulk.
+void CopyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, uint32_t count) RUNTIME_NOTHROW;
 // Updates volatile heap/static data location.
 void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 OBJ_GETTER(CompareAndSwapVolatileHeapRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;

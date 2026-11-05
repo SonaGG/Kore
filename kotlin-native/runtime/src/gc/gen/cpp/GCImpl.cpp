@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstring>
 #include <memory>
 
 #include "Allocator.hpp"
@@ -354,6 +355,35 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHe
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
     barriers::beforeHeapRefUpdate(ref, value, false);
     rememberIfOldToYoung(holder, value);
+}
+
+// Copying references between arrays (e.g. growing an ArrayList): outside of a concurrent mark only old->young edges need
+// recording, and one remembered holder covers all of them.
+void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept {
+    if (__builtin_expect(barriers::markClosureBarriersEnabled(), false)) {
+        if (destination <= source) {
+            for (size_t i = 0; i < count; ++i) {
+                mm::DirectRefAccessor ref{destination + i};
+                beforeHeapRefUpdateInObject(holder, ref, source[i]);
+                ref.store(source[i]);
+            }
+        } else {
+            for (size_t i = count; i > 0; --i) {
+                mm::DirectRefAccessor ref{destination + i - 1};
+                beforeHeapRefUpdateInObject(holder, ref, source[i - 1]);
+                ref.store(source[i - 1]);
+            }
+        }
+        return;
+    }
+    std::memmove(destination, source, count * sizeof(ObjHeader*));
+    if (!holder->heap() || !alloc::objectDataForObject(holder).oldOrSurviving()) return;
+    for (size_t i = 0; i < count; ++i) {
+        if (isYoungHeapObject(destination[i])) {
+            rememberIfOldToYoung(holder, destination[i]);
+            return;
+        }
+    }
 }
 
 // Stores that bypass the store functions (attaching a weak reference implementation to ExtraObjectData).

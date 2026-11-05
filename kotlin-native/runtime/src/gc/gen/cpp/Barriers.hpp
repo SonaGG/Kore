@@ -37,6 +37,9 @@ void switchToWeakProcessingBarriers() noexcept;
 void disableBarriers() noexcept;
 
 void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept;
+// Kore: whether stores must go through `beforeHeapRefUpdate` one by one (snapshot-at-the-beginning while marking).
+// The phase only changes while mutators are at safepoints.
+bool markClosureBarriersEnabled() noexcept;
 
 ObjHeader* weakRefReadBarrier(std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 

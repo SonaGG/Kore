@@ -495,6 +495,44 @@ TEST_F(GenerationalGCTest, StoreInObjectIntoOldHolderLogsHolder) {
     });
 }
 
+TEST_F(GenerationalGCTest, CopyIntoOldHolderLogsHolderOnce) {
+    RunInNewThread([](mm::ThreadData& threadData) {
+        GlobalObjectArrayHolder array{threadData};
+        collectFull();
+
+        ObjHeader* young1 = AllocateObject(threadData).header();
+        ObjHeader* young2 = AllocateObject(threadData).header();
+        ObjHeader* source[] = {young1, nullptr, young2};
+        CopyHeapRefsInObject(array.header(), array[0].ptr(), source, 3);
+
+        EXPECT_THAT(array[0].direct().load(), young1);
+        EXPECT_THAT(array[1].direct().load(), nullptr);
+        EXPECT_THAT(array[2].direct().load(), young2);
+        auto& rememberedSet = threadData.gc().impl().rememberedSet();
+        EXPECT_THAT(rememberedSet.objects, testing::ElementsAre(array.header()));
+        EXPECT_THAT(rememberedSet.slots, testing::IsEmpty());
+
+        collectYoung();
+
+        EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(array.header(), young1, young2));
+    });
+}
+
+TEST_F(GenerationalGCTest, CopyWithinArrayOverlapping) {
+    RunInNewThread([](mm::ThreadData& threadData) {
+        GlobalObjectArrayHolder array{threadData};
+        ObjHeader* objects[] = {AllocateObject(threadData).header(), AllocateObject(threadData).header()};
+        UpdateHeapRefInObject(array.header(), array[0].ptr(), objects[0]);
+        UpdateHeapRefInObject(array.header(), array[1].ptr(), objects[1]);
+
+        CopyHeapRefsInObject(array.header(), array[1].ptr(), array[0].ptr(), 2);
+
+        EXPECT_THAT(array[0].direct().load(), objects[0]);
+        EXPECT_THAT(array[1].direct().load(), objects[0]);
+        EXPECT_THAT(array[2].direct().load(), objects[1]);
+    });
+}
+
 TEST_F(GenerationalGCTest, StoreInObjectIntoYoungHolderRecordsNothing) {
     RunInNewThread([](mm::ThreadData& threadData) {
         auto& holder = AllocateObject(threadData);

@@ -5,6 +5,8 @@
 
 #include "GCImpl.hpp"
 
+#include <cstring>
+
 #include "Common.h"
 #include "GC.hpp"
 #include "GCStatistics.hpp"
@@ -59,6 +61,11 @@ ALWAYS_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader*
 ALWAYS_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {}
 
 ALWAYS_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {}
+
+// Kore: this GC has no barriers for stores into objects.
+void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept {
+    std::memmove(destination, source, count * sizeof(ObjHeader*));
+}
 
 ALWAYS_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(weakReferee.load(std::memory_order_relaxed));

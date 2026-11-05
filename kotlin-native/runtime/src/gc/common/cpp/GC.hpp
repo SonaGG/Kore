@@ -99,6 +99,9 @@ void beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, O
 // going through `beforeHeapRefUpdate` (e.g. linking a weak reference implementation from ExtraObjectData).
 // Generational GCs record old->young edges here; other GCs ignore it.
 void afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept;
+// Kore: copies `count` references from `source` to the slots at `destination` (which may overlap, like `memmove`), all
+// belonging to `holder`, as `count` stores with `beforeHeapRefUpdateInObject` would.
+void copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept;
 OBJ_GETTER(weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 
 bool isMarked(ObjHeader* object) noexcept;
