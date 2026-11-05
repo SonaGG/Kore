@@ -781,11 +781,62 @@ private:
   }
 };
 
+/// Folds tests of the tag bits of the headers of stack objects (e.g. by GC
+/// barriers): a stack object keeps its tag (`OBJECT_TAG_STACK`, both bits set)
+/// for its whole lifetime, even if its header is otherwise rewritten. Removes
+/// the code the folded tests make unreachable, so that the objects no longer
+/// escape there. Returns whether the function changed.
+static bool foldStackObjectTags(Function &F) {
+  constexpr uint64_t TagMask = 3;
+  SmallVector<std::pair<Instruction *, uint64_t>> Folds;
+  for (Instruction &I : instructions(F)) {
+    if (!isStackObject(&I))
+      continue;
+    for (User *U : I.users()) {
+      auto *Load = dyn_cast<LoadInst>(U);
+      if (!Load || Load->getPointerOperand() != &I)
+        continue;
+      // The header, as a pointer or as an integer.
+      SmallVector<Value *, 2> Values = {Load};
+      for (User *LoadUser : Load->users()) {
+        if (auto *Cast = dyn_cast<PtrToIntInst>(LoadUser))
+          Values.push_back(Cast);
+      }
+      for (Value *V : Values) {
+        for (User *VU : V->users()) {
+          auto *And = dyn_cast<BinaryOperator>(VU);
+          if (!And || And->getOpcode() != Instruction::And)
+            continue;
+          auto *Mask = dyn_cast<ConstantInt>(And->getOperand(1));
+          if (!Mask || (Mask->getZExtValue() & ~TagMask) != 0)
+            continue;
+          Folds.push_back({And, Mask->getZExtValue()});
+        }
+      }
+    }
+  }
+  if (Folds.empty())
+    return false;
+  for (auto &[And, Value] : Folds) {
+    And->replaceAllUsesWith(ConstantInt::get(And->getType(), Value));
+    And->eraseFromParent();
+  }
+  for (BasicBlock &BB : F)
+    ConstantFoldTerminator(&BB, /*DeleteDeadConditions=*/true);
+  removeUnreachableBlocks(F);
+  return true;
+}
+
 } // namespace
 
 PreservedAnalyses ObjectScalarReplacementPass::run(Function &F,
                                                    FunctionAnalysisManager &AM) {
   bool Changed = false;
+  bool ChangedCFG = foldStackObjectTags(F);
+  if (ChangedCFG) {
+    Changed = true;
+    AM.invalidate(F, PreservedAnalyses::none());
+  }
   {
     FrameSlots Slots(F);
     Changed |= Slots.promote(F);
@@ -815,7 +866,8 @@ PreservedAnalyses ObjectScalarReplacementPass::run(Function &F,
   if (!Changed)
     return PreservedAnalyses::all();
   PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
+  if (!ChangedCFG)
+    PA.preserveSet<CFGAnalyses>();
   return PA;
 }
 

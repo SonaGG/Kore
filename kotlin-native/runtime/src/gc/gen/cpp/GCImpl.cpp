@@ -697,6 +697,14 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHe
 // Stores into young objects (the common case, e.g. initializing a new object) need nothing: young objects are traced
 // if reachable.
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
+    // Kore: with conservative stack scanning, objects allocated on the stack lie in the scanned stack: like stack slots,
+    // their fields need no barrier (the scan sees them at every collection, so they are in the marking snapshot and are
+    // roots of young collections). A plain load of the tag, so that the check folds away for stack objects of the
+    // compiled code (the tag of heap objects never changes).
+    if (compiler::conservativeStacks() &&
+        (reinterpret_cast<uintptr_t>(*reinterpret_cast<TypeInfo* const*>(holder)) & OBJECT_TAG_MASK) == OBJECT_TAG_STACK) {
+        return;
+    }
     barriers::beforeHeapRefUpdate(ref, value, false);
     rememberIfOldToYoung(holder, value);
 }
