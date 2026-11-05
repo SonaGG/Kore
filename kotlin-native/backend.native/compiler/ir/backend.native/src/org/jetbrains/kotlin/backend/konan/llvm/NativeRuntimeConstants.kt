@@ -27,5 +27,6 @@ object NativeRuntimeConstants {
     const val CONCURRENT_WEAK_SWEEP: String = "Kotlin_concurrentWeakSweep"
     const val GC_MARK_SINGLE_THREADED: String = "Kotlin_gcMarkSingleThreaded"
     const val FIXED_BLOCK_PAGE_SIZE: String = "Kotlin_fixedBlockPageSize"
+    const val GC_YOUNG_GENERATION_SIZE: String = "Kotlin_gcYoungGenerationSize" // Kore
     const val PAGED_ALLOCATOR: String = "Kotlin_pagedAllocator"
 }

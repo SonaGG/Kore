@@ -237,6 +237,10 @@ class NativeSecondStageCompilationConfig(
     val fixedBlockPageSize: UInt
         get() = configuration.get(BinaryOptions.fixedBlockPageSize) ?: defaultFixedBlockPageSize
 
+    // Kore: 0 means the runtime default.
+    val gcYoungGenerationSize: UInt
+        get() = configuration.get(BinaryOptions.gcYoungGenerationSize) ?: 0u
+
     val concurrentWeakSweep: Boolean
         get() = configuration.get(BinaryOptions.concurrentWeakSweep) ?: true
 

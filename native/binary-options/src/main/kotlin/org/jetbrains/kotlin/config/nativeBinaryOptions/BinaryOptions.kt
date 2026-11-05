@@ -56,6 +56,9 @@ object BinaryOptions : BinaryOptionRegistry() {
 
     val fixedBlockPageSize by uintOption()
 
+    // Kore: young generation size in MiB for gc=gen (0 or unset: runtime default).
+    val gcYoungGenerationSize by uintOption()
+
     val concurrentWeakSweep by booleanOption()
 
     val concurrentMarkMaxIterations by uintOption()
