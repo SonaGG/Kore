@@ -35,7 +35,7 @@ holds. So once young collections are running, the custom allocator does not hand
 objects if more than half of it was live after its last sweep. Such pages are set aside ("parked") until the next full
 collection.
 
-The young generation size (the allocation volume between young collections) defaults to 16 MiB. Set it in MiB with
+The young generation size (the allocation volume between young collections) defaults to 64 MiB. Set it in MiB with
 `-Xbinary=gcYoungGenerationSize=<n>`.
 
 ### Major (full) collection

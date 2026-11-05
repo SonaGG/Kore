@@ -28,7 +28,7 @@ using namespace kotlin;
 namespace {
 
 // Allocation volume between young collections when the scheduler does not configure one.
-constexpr int64_t kDefaultYoungGenerationBytes = 16 * 1024 * 1024;
+constexpr int64_t kDefaultYoungGenerationBytes = 64 * 1024 * 1024;
 
 ALWAYS_INLINE gc::internal::RememberedSet& currentRememberedSet() noexcept {
     return mm::ThreadRegistry::Instance().CurrentThreadData()->gc().impl().rememberedSet();
