@@ -1662,15 +1662,18 @@ internal class CodeGeneratorVisitor(
                 alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
             }
         }
+        val fieldType = value.type.toLLVMType(llvm)
         return functionGenerationContext.loadSlot(
-                value.type.toLLVMType(llvm),
+                fieldType,
                 value.type.binaryTypeIsReference(),
                 fieldAddress,
                 !value.symbol.owner.isFinal,
                 resultSlot,
                 memoryOrder = order,
                 alignment = alignment
-        )
+        ).also { load ->
+            if (order == null && !value.symbol.owner.isStatic) llvm.setFieldTbaa(load, fieldType)
+        }
     }
 
     //-------------------------------------------------------------------------//
@@ -1729,6 +1732,8 @@ internal class CodeGeneratorVisitor(
         if (thisPtr != null && field.type.binaryTypeIsReference() && !isVolatile) {
             // Kore: let the GC barrier know which object is written to.
             functionGenerationContext.storeHeapRefInObject(valueToAssign, address, thisPtr)
+        } else if (thisPtr != null && !isVolatile) {
+            llvm.setFieldTbaa(functionGenerationContext.store(valueToAssign, address, alignment = alignment), LLVMTypeOf(valueToAssign)!!)
         } else {
             functionGenerationContext.storeAny(
                     valueToAssign, address, field.type.binaryTypeIsReference(), false,

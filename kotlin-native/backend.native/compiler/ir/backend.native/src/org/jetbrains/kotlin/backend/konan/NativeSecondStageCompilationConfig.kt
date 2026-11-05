@@ -250,6 +250,10 @@ class NativeSecondStageCompilationConfig(
     val conservativeStacks: Boolean
         get() = configuration.get(BinaryOptions.conservativeStacks) ?: false
 
+    // Kore: tag field accesses with (clang compatible) type-based alias analysis metadata.
+    val tbaa: Boolean
+        get() = configuration.get(BinaryOptions.tbaa) ?: true
+
     // Kore: 0 means automatic.
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u

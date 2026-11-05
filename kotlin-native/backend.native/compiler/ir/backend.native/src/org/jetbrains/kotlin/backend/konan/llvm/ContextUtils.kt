@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.lower.originalConstructor
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.util.*
+import org.jetbrains.kotlin.konan.target.Family
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.library.KotlinLibrary
 
@@ -403,6 +404,36 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     val staticData = KotlinStaticData(generationState, this, module)
 
     private val target = context.config.target
+
+    // Kore: type-based alias analysis tags for Kotlin field accesses. They are the scalar type nodes clang uses for the
+    // runtime, so that they combine with the tags of inlined runtime code: references are "any pointer" (which aliases
+    // every pointer type the runtime uses for objects), primitives the C types the runtime uses for them (`KInt` is
+    // "int", ...). Other types (bytes, booleans, vectors) get no tag.
+    private val tbaaTags: Map<LLVMTypeRef, LLVMValueRef> by lazy {
+        val zero = LLVMConstInt(int64Type, 0, 0)!!
+        fun type(name: String, parent: LLVMValueRef) = node(llvmContext, name.mdString(llvmContext), parent, zero)!!
+        fun tag(type: LLVMValueRef) = node(llvmContext, type, type, zero)!!
+        val root = node(llvmContext, "Simple C++ TBAA".mdString(llvmContext))!!
+        val char = type("omnipotent char", root)
+        val int64Name = if ((target.family == Family.LINUX || target.family == Family.ANDROID) && runtime.pointerSize == 8)
+            "long" else "long long"
+        mapOf(
+                pointerType to tag(type("any pointer", char)),
+                int16Type to tag(type("short", char)),
+                int32Type to tag(type("int", char)),
+                int64Type to tag(type(int64Name, char)),
+                floatType to tag(type("float", char)),
+                doubleType to tag(type("double", char)),
+        )
+    }
+    private val tbaaKind by lazy { LLVMGetMDKindIDInContext(llvmContext, "tbaa", 4) }
+
+    /** Tags a (non-atomic) load or store of a Kotlin field of LLVM type [type]. */
+    fun setFieldTbaa(access: LLVMValueRef, type: LLVMTypeRef) {
+        if (!context.config.tbaa) return
+        val tag = tbaaTags[type] ?: return
+        LLVMSetMetadata(access, tbaaKind, tag)
+    }
 
     override val runtime get() = generationState.runtime
 

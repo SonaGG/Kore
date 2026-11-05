@@ -35,7 +35,7 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
 
     inner class ParameterRecord(val address: LLVMValueRef, val type: LLVMTypeRef, val isObjectType: Boolean) : Record {
         override fun load(resultSlot: LLVMValueRef?): LLVMValueRef = functionGenerationContext.loadSlot(type, isObjectType, address, false, resultSlot)
-        override fun store(value: LLVMValueRef) = functionGenerationContext.store(value, address)
+        override fun store(value: LLVMValueRef) { functionGenerationContext.store(value, address) }
         override fun address() : LLVMValueRef = this.address
         override fun toString() = (if (isObjectType) "refslot" else "slot") + " for ${address}"
     }

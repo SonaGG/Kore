@@ -65,6 +65,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 
+    // Kore: type-based alias analysis metadata on field accesses.
+    val tbaa by booleanOption()
+
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 

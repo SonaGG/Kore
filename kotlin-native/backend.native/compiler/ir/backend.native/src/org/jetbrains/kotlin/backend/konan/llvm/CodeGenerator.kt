@@ -503,6 +503,23 @@ internal class StackLocalsManagerImpl(
     override fun clean(refsOnly: Boolean) = stackLocals.forEach { clean(it, refsOnly) }
 
     private fun clean(stackLocal: StackLocal, refsOnly: Boolean) = with(functionGenerationContext) {
+        // Kore: with conservative stack scanning, stack objects are part of the scanned stack and need no barriers:
+        // clear them like any stack memory.
+        if (context.config.conservativeStacks) {
+            val type = if (stackLocal.isArray)
+                localArrayType(stackLocal.irClass, stackLocal.arraySize!!)
+            else
+                llvmDeclarations.forClass(stackLocal.irClass).bodyType.llvmBodyType
+            val bodySize = LLVMSizeOfTypeInBits(codegen.llvmTargetData, type).toInt() / 8
+            // Objects keep their header, arrays also their length.
+            val headerSize = if (stackLocal.isArray)
+                LLVMOffsetOfElement(codegen.llvmTargetData, type, 1).toInt()
+            else
+                runtime.pointerSize
+            val body = gep(llvm.int8Type, stackLocal.stackAllocationPtr, llvm.int32(headerSize))
+            memset(body, 0, bodySize - headerSize)
+            return@with
+        }
         if (stackLocal.isArray) {
             if (stackLocal.irClass.symbol == context.irBuiltIns.arrayClass) {
                 call(llvm.zeroArrayRefsFunction, listOf(stackLocal.objHeaderPtr))
@@ -742,10 +759,11 @@ internal abstract class FunctionGenerationContext(
         return value
     }
 
-    fun store(value: LLVMValueRef, ptr: LLVMValueRef, memoryOrder: LLVMAtomicOrdering? = null, alignment: Int? = null) {
-        val store = LLVMBuildStore(builder, value, ptr)
+    fun store(value: LLVMValueRef, ptr: LLVMValueRef, memoryOrder: LLVMAtomicOrdering? = null, alignment: Int? = null): LLVMValueRef {
+        val store = LLVMBuildStore(builder, value, ptr)!!
         memoryOrder?.let { LLVMSetOrdering(store, it) }
         alignment?.let { LLVMSetAlignment(store, it) }
+        return store
     }
 
     fun storeHeapRef(value: LLVMValueRef, ptr: LLVMValueRef) {
