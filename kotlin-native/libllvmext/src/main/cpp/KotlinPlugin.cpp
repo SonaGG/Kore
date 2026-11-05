@@ -92,10 +92,23 @@ static void enableExtraOptimizations() {
         "enable-loopinterchange", "enable-loop-flatten", "enable-unroll-and-jam",
         "enable-loop-versioning-licm", "enable-gvn-hoist", "enable-gvn-sink",
         "extra-vectorizer-passes", "enable-ipra",
-        "enable-interleaved-mem-accesses"}) {
+        "enable-interleaved-mem-accesses", "enable-partial-inlining",
+        "hot-cold-split"}) {
     auto It = Options.find(Name);
     if (It != Options.end())
       It->second->addOccurrence(0, Name, "true");
+  }
+  // For experiments: `KORE_LLVM_OPTS="name=value name=value"` sets LLVM
+  // options.
+  if (std::optional<std::string> Extra = sys::Process::GetEnv("KORE_LLVM_OPTS")) {
+    SmallVector<StringRef> Settings;
+    StringRef(*Extra).split(Settings, ' ', -1, false);
+    for (StringRef Setting : Settings) {
+      auto [Name, Value] = Setting.split('=');
+      auto It = Options.find(Name);
+      if (It != Options.end())
+        It->second->addOccurrence(0, Name, Value.empty() ? "true" : Value);
+    }
   }
 }
 
