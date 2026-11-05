@@ -26,6 +26,9 @@ public:
     static auto bySafePoint() noexcept { return ScheduleReason{kBySafePoint}; }
     static auto byAllocation(std::size_t totalAllocatedBytes) noexcept { return ScheduleReason{totalAllocatedBytes}; }
 
+    // Kore: allocation pressure, as opposed to an explicit request, the timer or a safepoint.
+    bool isByAllocation() const noexcept { return data_ != kManually && data_ != kByTimer && data_ != kBySafePoint; }
+
     ALWAYS_INLINE void log() const noexcept {
         constexpr auto tag = logging::Tag::kGCScheduler;
         if (data_ == kManually) {
@@ -51,7 +54,11 @@ class EpochScheduler : private Pinned {
 public:
     using Epoch = int64_t;
 
-    explicit EpochScheduler(std::function<Epoch()> scheduleGC) noexcept : scheduleGC_(std::move(scheduleGC)) {}
+    explicit EpochScheduler(std::function<Epoch()> scheduleGC) noexcept :
+        scheduleGC_([scheduleGC = std::move(scheduleGC)](ScheduleReason) { return scheduleGC(); }) {}
+
+    // Kore: the callback is told why the epoch is scheduled (e.g. to request only a young-generation collection).
+    explicit EpochScheduler(std::function<Epoch(ScheduleReason)> scheduleGC) noexcept : scheduleGC_(std::move(scheduleGC)) {}
 
     // Schedule the next GC epoch unless the GC has a scheduled epoch already.
     // If the GC is currently performing collection, this will schedule the next one.
@@ -68,7 +75,7 @@ public:
     void onGCFinish(Epoch epoch) noexcept;
 
 private:
-    std::function<Epoch()> scheduleGC_;
+    std::function<Epoch(ScheduleReason)> scheduleGC_;
     std::optional<int64_t> scheduledEpoch_;
     std::mutex scheduledEpochMutex_;
 };

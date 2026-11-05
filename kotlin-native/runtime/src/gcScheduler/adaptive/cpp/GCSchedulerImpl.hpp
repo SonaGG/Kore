@@ -45,6 +45,12 @@ template <typename Clock>
 class GCSchedulerDataAdaptive {
 public:
     GCSchedulerDataAdaptive(GCSchedulerConfig& config, std::function<int64_t()> scheduleGC) noexcept :
+        GCSchedulerDataAdaptive(config, std::function<int64_t(ScheduleReason)>([scheduleGC = std::move(scheduleGC)](ScheduleReason) {
+            return scheduleGC();
+        })) {}
+
+    // Kore: the callback is told why the epoch is scheduled.
+    GCSchedulerDataAdaptive(GCSchedulerConfig& config, std::function<int64_t(ScheduleReason)> scheduleGC) noexcept :
         config_(config),
         scheduleGC_(std::move(scheduleGC)),
         appStateTracking_(mm::GlobalData::Instance().appStateTracking()),

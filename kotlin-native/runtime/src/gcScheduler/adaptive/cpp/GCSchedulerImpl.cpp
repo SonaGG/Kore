@@ -21,9 +21,11 @@ gcScheduler::GCScheduler::ThreadData::ThreadData(gcScheduler::GCScheduler& sched
 gcScheduler::GCScheduler::ThreadData::~ThreadData() = default;
 
 gcScheduler::GCScheduler::Impl::Impl(gcScheduler::GCSchedulerConfig& config) noexcept :
-    impl_(config, []() noexcept {
-        return mm::GlobalData::Instance().gc().Schedule();
-    }) {}
+    impl_(config, std::function<int64_t(gcScheduler::ScheduleReason)>([](gcScheduler::ScheduleReason reason) noexcept {
+        // Kore: allocation pressure only needs the young generation collected (if the GC is generational).
+        auto& gc = mm::GlobalData::Instance().gc();
+        return reason.isByAllocation() ? gc.ScheduleYoung() : gc.Schedule();
+    })) {}
 
 gcScheduler::GCScheduler::GCScheduler() noexcept : impl_(std::make_unique<Impl>(config_)) {}
 

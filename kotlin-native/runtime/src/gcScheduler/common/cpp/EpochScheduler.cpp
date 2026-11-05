@@ -19,7 +19,7 @@ Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpoch(ScheduleReason re
     // so we ignore thread state switching to avoid recursive safe points.
     CallsCheckerIgnoreGuard ignoreGuard;
     std::unique_lock guard(scheduledEpochMutex_);
-    auto epoch = scheduleGC_();
+    auto epoch = scheduleGC_(reason);
     if (auto scheduled = scheduledEpoch_) {
         RuntimeAssert(
                 *scheduled <= epoch, "Scheduled epoch %" PRId64 " which is somehow less previously scheduled %" PRId64, epoch, *scheduled);
@@ -37,7 +37,7 @@ Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpochIfNotInProgress(Sc
     if (auto scheduled = scheduledEpoch_) {
         return *scheduled;
     }
-    auto epoch = scheduleGC_();
+    auto epoch = scheduleGC_(reason);
     scheduledEpoch_ = epoch;
     reason.log();
     return epoch;

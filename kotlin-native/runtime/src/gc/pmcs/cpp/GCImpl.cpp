@@ -68,6 +68,11 @@ int64_t gc::GC::Schedule() noexcept {
     return impl_->state_.schedule();
 }
 
+// Kore: not generational, every collection is a full one.
+int64_t gc::GC::ScheduleYoung() noexcept {
+    return Schedule();
+}
+
 void gc::GC::WaitFinished(int64_t epoch) noexcept {
     impl_->state_.waitEpochFinished(epoch);
 }
@@ -77,6 +82,8 @@ void gc::GC::WaitFinalizers(int64_t epoch) noexcept {
 }
 
 ALWAYS_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {}
+
+ALWAYS_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {}
 
 PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_RESULT_OF(gc::WeakRefRead, weakReferee);

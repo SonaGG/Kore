@@ -38,6 +38,10 @@ struct GCSchedulerConfig {
     std::atomic<int64_t> maxHeapBytes = std::numeric_limits<int64_t>::max();
     // GC will be triggered when object bytes reach `heapTriggerCoefficient * targetHeapBytes`.
     std::atomic<double> heapTriggerCoefficient = 0.9;
+    // Kore: size of the young generation for generational GCs, 0 otherwise. When non-zero and `autoTune = true`, the
+    // next collection is triggered after this many bytes have been allocated on top of the bytes alive after the
+    // previous collection, instead of when the heap has grown by `1 / targetHeapUtilization`.
+    std::atomic<int64_t> youngGenerationBytes = 0;
     // See `mutatorAssists()`.
     std::atomic<std::underlying_type_t<MutatorAssists>> mutatorAssistsImpl =
             static_cast<std::underlying_type_t<MutatorAssists>>(MutatorAssists::kDefault);

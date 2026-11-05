@@ -59,6 +59,9 @@ public:
     bool isValid() const;
     void finished();
     void finalizersDone();
+    // Kore: a young-generation collection of a generational GC. Its sweep also keeps old objects that were not marked
+    // in this epoch, so the marked/kept consistency check does not apply.
+    void youngCollection();
     void finalizersScheduled(uint64_t finalizersCount);
     void suspensionRequested();
     void threadsAreSuspended();

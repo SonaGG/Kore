@@ -74,6 +74,9 @@ public:
 
     // TODO: These should exist only in the scheduler.
     int64_t Schedule() noexcept;
+    // Kore: like Schedule(), but a generational GC may collect only the young generation in this epoch.
+    // Non-generational GCs perform a regular collection.
+    int64_t ScheduleYoung() noexcept;
     void WaitFinished(int64_t epoch) noexcept;
     void WaitFinalizers(int64_t epoch) noexcept;
 
@@ -89,6 +92,10 @@ private:
 };
 
 void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept;
+// Kore: must be called after `value` was stored into a reference slot that belongs to `holder` but was written without
+// going through `beforeHeapRefUpdate` (e.g. linking a weak reference implementation from ExtraObjectData).
+// Generational GCs record old->young edges here; other GCs ignore it.
+void afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept;
 OBJ_GETTER(weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 
 bool isMarked(ObjHeader* object) noexcept;

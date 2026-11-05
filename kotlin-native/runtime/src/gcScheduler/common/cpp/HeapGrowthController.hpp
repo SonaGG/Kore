@@ -48,6 +48,11 @@ public:
     void updateBoundaries(size_t aliveBytes) noexcept {
         if (config_.autoTune.load()) {
             double targetHeapBytes = static_cast<double>(aliveBytes) / config_.targetHeapUtilization;
+            if (auto youngGenerationBytes = config_.youngGenerationBytes.load(std::memory_order_relaxed); youngGenerationBytes > 0) {
+                // Kore: generational GC. Trigger the next (young) collection after `youngGenerationBytes` of allocation.
+                targetHeapBytes = static_cast<double>(aliveBytes) +
+                        static_cast<double>(youngGenerationBytes) / config_.heapTriggerCoefficient.load(std::memory_order_relaxed);
+            }
             if (!std::isfinite(targetHeapBytes)) {
                 // This shouldn't happen in practice: targetHeapUtilization is in (0, 1]. But in case it does, don't touch anything.
                 return;

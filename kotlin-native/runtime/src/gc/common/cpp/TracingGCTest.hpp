@@ -9,6 +9,7 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -186,6 +187,23 @@ std::vector<ObjHeader*> Alive(mm::ThreadData& threadData) {
 }
 
 
+// Kore: generational GCs keep the marks of surviving objects (sticky marks: marked means old), so the checks that
+// objects are unmarked before and after a collection do not apply to them. Such fixtures define
+// `static constexpr bool kStickyMarks = true;`.
+template <typename Fixture, typename = void>
+struct HasStickyMarks : std::false_type {};
+template <typename Fixture>
+struct HasStickyMarks<Fixture, std::void_t<decltype(Fixture::kStickyMarks)>> : std::bool_constant<Fixture::kStickyMarks> {};
+
+template <typename Fixture>
+bool isMarkedForTest(ObjHeader* object) noexcept {
+    if constexpr (HasStickyMarks<Fixture>::value) {
+        return false;
+    } else {
+        return gc::isMarked(object);
+    }
+}
+
 template <typename FixtureImpl>
 class TracingGCTest : public testing::Test {
 public:
@@ -214,12 +232,12 @@ TYPED_TEST_P(TracingGCTest, RootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global1.header(), global2.header(), global3.header(), stack1.header(), stack2.header(), stack3.header()));
-        ASSERT_THAT(gc::isMarked(global1.header()), false);
-        ASSERT_THAT(gc::isMarked(global2.header()), false);
-        ASSERT_THAT(gc::isMarked(global3.header()), false);
-        ASSERT_THAT(gc::isMarked(stack1.header()), false);
-        ASSERT_THAT(gc::isMarked(stack2.header()), false);
-        ASSERT_THAT(gc::isMarked(stack3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack3.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
@@ -227,12 +245,12 @@ TYPED_TEST_P(TracingGCTest, RootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global1.header(), global2.header(), global3.header(), stack1.header(), stack2.header(), stack3.header()));
-        EXPECT_THAT(gc::isMarked(global1.header()), false);
-        EXPECT_THAT(gc::isMarked(global2.header()), false);
-        EXPECT_THAT(gc::isMarked(global3.header()), false);
-        EXPECT_THAT(gc::isMarked(stack1.header()), false);
-        EXPECT_THAT(gc::isMarked(stack2.header()), false);
-        EXPECT_THAT(gc::isMarked(stack3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack3.header()), false);
     });
 }
 
@@ -260,12 +278,12 @@ TYPED_TEST_P(TracingGCTest, InterconnectedRootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global1.header(), global2.header(), global3.header(), stack1.header(), stack2.header(), stack3.header()));
-        ASSERT_THAT(gc::isMarked(global1.header()), false);
-        ASSERT_THAT(gc::isMarked(global2.header()), false);
-        ASSERT_THAT(gc::isMarked(global3.header()), false);
-        ASSERT_THAT(gc::isMarked(stack1.header()), false);
-        ASSERT_THAT(gc::isMarked(stack2.header()), false);
-        ASSERT_THAT(gc::isMarked(stack3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack3.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
@@ -273,12 +291,12 @@ TYPED_TEST_P(TracingGCTest, InterconnectedRootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global1.header(), global2.header(), global3.header(), stack1.header(), stack2.header(), stack3.header()));
-        EXPECT_THAT(gc::isMarked(global1.header()), false);
-        EXPECT_THAT(gc::isMarked(global2.header()), false);
-        EXPECT_THAT(gc::isMarked(global3.header()), false);
-        EXPECT_THAT(gc::isMarked(stack1.header()), false);
-        EXPECT_THAT(gc::isMarked(stack2.header()), false);
-        EXPECT_THAT(gc::isMarked(stack3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack3.header()), false);
     });
 }
 
@@ -288,8 +306,8 @@ TYPED_TEST_P(TracingGCTest, FreeObjects) {
         auto& object2 = AllocateObject(threadData);
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(object1.header(), object2.header()));
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
@@ -303,8 +321,8 @@ TYPED_TEST_P(TracingGCTest, FreeObjectsWithFinalizers) {
         auto& object2 = AllocateObjectWithFinalizer(threadData);
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(object1.header(), object2.header()));
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
 
         EXPECT_CALL(this->finalizerHook(), Call(object1.header()));
         EXPECT_CALL(this->finalizerHook(), Call(object2.header()));
@@ -323,8 +341,8 @@ TYPED_TEST_P(TracingGCTest, FreeObjectWithFreeWeak) {
         })();
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(object1.header(), weak1.header()));
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(weak1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(weak1.header()), false);
         ASSERT_THAT(weak1.get(), object1.header());
 
         EXPECT_CALL(this->finalizerHook(), Call(weak1.header()));
@@ -341,14 +359,14 @@ TYPED_TEST_P(TracingGCTest, FreeObjectWithHoldedWeak) {
         auto& weak1 = test_support::InstallWeakReference(threadData, object1.header(), stack->field1.ptr());
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(object1.header(), weak1.header(), stack.header()));
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(weak1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(weak1.header()), false);
         ASSERT_THAT(weak1.get(), object1.header());
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(weak1.header(), stack.header()));
-        EXPECT_THAT(gc::isMarked(weak1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(weak1.header()), false);
         EXPECT_THAT(weak1.get(), nullptr);
     });
 }
@@ -371,12 +389,12 @@ TYPED_TEST_P(TracingGCTest, ObjectReferencedFromRootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header()));
-        ASSERT_THAT(gc::isMarked(global.header()), false);
-        ASSERT_THAT(gc::isMarked(stack.header()), false);
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
-        ASSERT_THAT(gc::isMarked(object3.header()), false);
-        ASSERT_THAT(gc::isMarked(object4.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
@@ -384,12 +402,12 @@ TYPED_TEST_P(TracingGCTest, ObjectReferencedFromRootSet) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(stack.header()), false);
-        EXPECT_THAT(gc::isMarked(object1.header()), false);
-        EXPECT_THAT(gc::isMarked(object2.header()), false);
-        EXPECT_THAT(gc::isMarked(object3.header()), false);
-        EXPECT_THAT(gc::isMarked(object4.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
     });
 }
 
@@ -418,14 +436,14 @@ TYPED_TEST_P(TracingGCTest, ObjectsWithCycles) {
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header(),
                         object5.header(), object6.header()));
-        ASSERT_THAT(gc::isMarked(global.header()), false);
-        ASSERT_THAT(gc::isMarked(stack.header()), false);
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
-        ASSERT_THAT(gc::isMarked(object3.header()), false);
-        ASSERT_THAT(gc::isMarked(object4.header()), false);
-        ASSERT_THAT(gc::isMarked(object5.header()), false);
-        ASSERT_THAT(gc::isMarked(object6.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object5.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object6.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
@@ -433,12 +451,12 @@ TYPED_TEST_P(TracingGCTest, ObjectsWithCycles) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(stack.header()), false);
-        EXPECT_THAT(gc::isMarked(object1.header()), false);
-        EXPECT_THAT(gc::isMarked(object2.header()), false);
-        EXPECT_THAT(gc::isMarked(object3.header()), false);
-        EXPECT_THAT(gc::isMarked(object4.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
     });
 }
 
@@ -467,14 +485,14 @@ TYPED_TEST_P(TracingGCTest, ObjectsWithCyclesAndFinalizers) {
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header(),
                         object5.header(), object6.header()));
-        ASSERT_THAT(gc::isMarked(global.header()), false);
-        ASSERT_THAT(gc::isMarked(stack.header()), false);
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
-        ASSERT_THAT(gc::isMarked(object3.header()), false);
-        ASSERT_THAT(gc::isMarked(object4.header()), false);
-        ASSERT_THAT(gc::isMarked(object5.header()), false);
-        ASSERT_THAT(gc::isMarked(object6.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object5.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object6.header()), false);
 
         EXPECT_CALL(this->finalizerHook(), Call(object5.header()));
         EXPECT_CALL(this->finalizerHook(), Call(object6.header()));
@@ -484,12 +502,12 @@ TYPED_TEST_P(TracingGCTest, ObjectsWithCyclesAndFinalizers) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(stack.header()), false);
-        EXPECT_THAT(gc::isMarked(object1.header()), false);
-        EXPECT_THAT(gc::isMarked(object2.header()), false);
-        EXPECT_THAT(gc::isMarked(object3.header()), false);
-        EXPECT_THAT(gc::isMarked(object4.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
     });
 }
 
@@ -506,18 +524,18 @@ TYPED_TEST_P(TracingGCTest, ObjectsWithCyclesIntoRootSet) {
         object2->field1 = stack.header();
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), stack.header(), object1.header(), object2.header()));
-        ASSERT_THAT(gc::isMarked(global.header()), false);
-        ASSERT_THAT(gc::isMarked(stack.header()), false);
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), stack.header(), object1.header(), object2.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(stack.header()), false);
-        EXPECT_THAT(gc::isMarked(object1.header()), false);
-        EXPECT_THAT(gc::isMarked(object2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
     });
 }
 
@@ -546,14 +564,14 @@ TYPED_TEST_P(TracingGCTest, RunGCTwice) {
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header(),
                         object5.header(), object6.header()));
-        ASSERT_THAT(gc::isMarked(global.header()), false);
-        ASSERT_THAT(gc::isMarked(stack.header()), false);
-        ASSERT_THAT(gc::isMarked(object1.header()), false);
-        ASSERT_THAT(gc::isMarked(object2.header()), false);
-        ASSERT_THAT(gc::isMarked(object3.header()), false);
-        ASSERT_THAT(gc::isMarked(object4.header()), false);
-        ASSERT_THAT(gc::isMarked(object5.header()), false);
-        ASSERT_THAT(gc::isMarked(object6.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object5.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object6.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
@@ -562,12 +580,12 @@ TYPED_TEST_P(TracingGCTest, RunGCTwice) {
                 Alive(threadData),
                 testing::UnorderedElementsAre(
                         global.header(), stack.header(), object1.header(), object2.header(), object3.header(), object4.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(stack.header()), false);
-        EXPECT_THAT(gc::isMarked(object1.header()), false);
-        EXPECT_THAT(gc::isMarked(object2.header()), false);
-        EXPECT_THAT(gc::isMarked(object3.header()), false);
-        EXPECT_THAT(gc::isMarked(object4.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(stack.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object1.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object3.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object4.header()), false);
     });
 }
 
@@ -584,12 +602,12 @@ TYPED_TEST_P(TracingGCTest, PermanentObjects) {
         global2->field1 = global1.header();
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(global2.header()));
-        EXPECT_THAT(gc::isMarked(global2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global2.header()));
-        EXPECT_THAT(gc::isMarked(global2.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global2.header()), false);
     });
 }
 
@@ -603,14 +621,14 @@ TYPED_TEST_P(TracingGCTest, SameObjectInRootSet) {
 
         ASSERT_THAT(global.header(), stack.header());
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), object.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(object.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object.header()), false);
 
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), object.header()));
-        EXPECT_THAT(gc::isMarked(global.header()), false);
-        EXPECT_THAT(gc::isMarked(object.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(global.header()), false);
+        EXPECT_THAT(isMarkedForTest<TypeParam>(object.header()), false);
     });
 }
 
@@ -1053,9 +1071,9 @@ TYPED_TEST_P(TracingGCTest, FreeObjectWithFreeWeakReversedOrder) {
         mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 
         ASSERT_THAT(Alive(threadData), testing::UnorderedElementsAre(object1_local.header(), weak.load()->header(), global1.header()));
-        ASSERT_THAT(gc::isMarked(global1.header()), false);
-        ASSERT_THAT(gc::isMarked(object1_local.header()), false);
-        ASSERT_THAT(gc::isMarked(weak.load()->header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(global1.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(object1_local.header()), false);
+        ASSERT_THAT(isMarkedForTest<TypeParam>(weak.load()->header()), false);
         ASSERT_THAT(weak.load()->get(), object1_local.header());
 
         global1->field1 = nullptr;

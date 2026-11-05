@@ -101,6 +101,7 @@ struct GCInfo {
     SweepStatsMap sweepStats;
     MemoryUsageMap memoryUsageBefore;
     MemoryUsageMap memoryUsageAfter;
+    bool youngCollection = false; // Kore
 
     void build(KRef builder) {
         if (!epoch) return;
@@ -216,7 +217,7 @@ void GCHandle::finished() {
     if (auto* stat = statByEpoch(epoch_)) {
         stat->endTime = static_cast<KLong>(konan::getTimeNanos());
         stat->memoryUsageAfter.heap = currentHeapUsage();
-        if (stat->markStats && stat->sweepStats.heap) {
+        if (stat->markStats && stat->sweepStats.heap && !stat->youngCollection) {
             RuntimeAssert(stat->markStats->markedCount == stat->sweepStats.heap->keptCount,
                           "Mismatch in statistics: marked %" PRId64 " objects, while %" PRId64 " are alive after sweep",
                           stat->markStats->markedCount, stat->sweepStats.heap->keptCount);
@@ -327,6 +328,12 @@ void GCHandle::threadsAreResumed() {
             auto time = (endTime - *startTime) / 1000;
             GCLogDebug(epoch_, "Resume all threads. Total pause time is %" PRId64 " microseconds.", time);
         }
+    }
+}
+void GCHandle::youngCollection() {
+    std::lock_guard guard(lock);
+    if (auto* stat = statByEpoch(epoch_)) {
+        stat->youngCollection = true;
     }
 }
 void GCHandle::finalizersDone() {
