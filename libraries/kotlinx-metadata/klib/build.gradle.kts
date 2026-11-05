@@ -48,7 +48,10 @@ if (deployVersion != null) {
 runtimeJarWithRelocation {
     from(mainSourceSet.output)
     exclude("**/*.proto")
-    relocate("org.jetbrains.kotlin", "kotlin.metadata.internal")
+    // Kore: upstream relocates `org.jetbrains.kotlin` -> `kotlin.metadata.internal` here, embedding private copies of
+    // core/compiler modules. In Kore those modules are stubs backed by kotlin-compiler.jar (nothing to embed), and this
+    // jar is only consumed inside the Kotlin/Native compiler, where the original classes are on the classpath anyway.
+    // So the relocation is disabled; the library binds to the compiler's own classes.
 }
 
 sourcesJar()

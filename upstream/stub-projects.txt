@@ -1,0 +1,90 @@
+# Kore stub projects.
+#
+# Monorepo projects that Kore's (unmodified upstream) build scripts reference but whose sources are NOT part of Kore.
+# Each line: `<upstream project path>  [<published artifact>]`.
+#   - The artifact is an `org.jetbrains.kotlin` module name, resolved at `kore.upstream.kotlin.version`.
+#   - No artifact means `kotlin-compiler`: the unshaded compiler jar bundles all compiler/core modules (and IntelliJ core).
+#   - `none` means an empty project (test-only infrastructure that Kore does not run; see README).
+#
+# When upstream adds a new `project(":...")` reference, Gradle fails with "Project with path ... could not be found":
+# add the path here.
+
+:compiler:cli
+:compiler:cli-base
+:compiler:compiler.version
+:compiler:config
+:compiler:config.jvm
+:compiler:container
+:compiler:fir:checkers
+:compiler:fir:cones
+:compiler:fir:diagnostic-renderers
+:compiler:fir:entrypoint
+:compiler:fir:fir-serialization
+:compiler:fir:fir2ir
+:compiler:fir:providers
+:compiler:fir:resolve
+:compiler:fir:semantics
+:compiler:fir:tree
+:compiler:frontend
+:compiler:frontend.common
+:compiler:frontend.common-psi
+:compiler:frontend.common.jvm
+:compiler:frontend.java
+:compiler:ir.backend.common
+:compiler:ir.inline
+:compiler:ir.psi2ir
+:compiler:ir.serialization.common
+:compiler:ir.tree
+:compiler:psi:psi-api
+:compiler:psi:psi-frontend-utils
+:compiler:psi:psi-impl
+:compiler:resolution
+:compiler:serialization
+:compiler:serialization.common
+:compiler:test-infrastructure-utils  none
+:compiler:test-infrastructure:grouping-test-engine  none
+:compiler:tests-common  none
+:compiler:tests-common-new  none
+:compiler:tests-compiler-utils  none
+:compiler:tests-mutes:mutes-junit4  none
+:compiler:tests-mutes:mutes-junit5  none
+:compiler:util
+:core:compiler.common
+:core:descriptors
+:core:descriptors.jvm
+:core:deserialization
+:core:deserialization.common
+:core:language.model
+:core:language.targets
+:core:metadata
+:core:names
+:core:util.runtime
+:dependencies:intellij-core
+:dependencies:tools-jar-api  none
+:generators:test-generator  none
+:kotlin-compiler
+:kotlin-compiler-embeddable  kotlin-compiler-embeddable
+:kotlin-gradle-plugins-bom  kotlin-gradle-plugins-bom
+:kotlin-gradle-statistics  kotlin-gradle-statistics
+:kotlin-stdlib  kotlin-stdlib
+:kotlin-stdlib-common  kotlin-stdlib
+:kotlin-stdlib-jdk8  kotlin-stdlib-jdk8
+:kotlin-test  kotlin-test
+:kotlin-tooling-core  kotlin-tooling-core
+:kotlin-util-io  kotlin-util-io
+:kotlin-util-klib  kotlin-util-klib
+:kotlin-util-klib-abi
+:kotlin-util-klib-metadata  kotlin-util-klib-metadata
+:native:analysis-api-based-test-utils  none
+:native:external-projects-test-utils  none
+:native:native.tests  none
+:native:objcexport-header-generator-analysis-api  none
+:test-instrumenter  none
+:repo:test-federation-runtime  none
+:compiler:config:configuration-keys-generator  none  # generated sources are checked in (gen/)
+:compiler:fir:checkers:checkers-component-generator  none  # generated sources are checked in (gen/)
+:native:external-projects-test-utils:testLibraryA  none
+:native:external-projects-test-utils:testLibraryB  none
+:native:external-projects-test-utils:testLibraryC  none
+:native:external-projects-test-utils:testInternalLibrary  none
+:native:external-projects-test-utils:testExtensionsLibrary  none
