@@ -118,11 +118,25 @@ struct ObjHeader {
 };
 static_assert(alignof(ObjHeader) <= kotlin::kObjectAlignment);
 
+// Kore: the length of an array. It is accessed as an enum, which has a type-based alias analysis type of its own in C++,
+// so LLVM knows that stores to array elements (of type `int` and the like) cannot change array lengths, and can hoist
+// array length loads (e.g. of bounds checks) out of loops that write arrays.
+enum class ArrayLengthRep : uint32_t {};
+struct ArrayLength {
+  ArrayLengthRep value_;
+  ALWAYS_INLINE operator uint32_t() const noexcept { return static_cast<uint32_t>(value_); }
+  ALWAYS_INLINE ArrayLength& operator=(uint32_t value) noexcept {
+    value_ = static_cast<ArrayLengthRep>(value);
+    return *this;
+  }
+};
+static_assert(sizeof(ArrayLength) == sizeof(uint32_t));
+
 // Header of value type array objects.
 // Element size is stored in instanceSize_ field of TypeInfo, negated.
 #define ARRAY_HEADER_FIELDS \
   OBJ_HEADER_FIELDS \
-  uint32_t count_;
+  ArrayLength count_;
 
 struct ArrayHeader {
   ARRAY_HEADER_FIELDS

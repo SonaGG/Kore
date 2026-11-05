@@ -32,7 +32,17 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
 
     private fun arrayHeader(typeInfo: ConstPointer, length: Int): Struct {
         assert(length >= 0)
-        return Struct(runtime.arrayHeaderType, permanentTag(typeInfo), llvm.constInt32(length))
+        return Struct(runtime.arrayHeaderType, permanentTag(typeInfo), arrayLength(runtime.arrayHeaderType, length))
+    }
+
+    // Kore: the runtime wraps array lengths into a struct (`ArrayLength`), see Memory.h.
+    private fun arrayLength(headerType: LLVMTypeRef, length: Int): ConstValue {
+        val lengthType = LLVMStructGetTypeAtIndex(headerType, 1)!!
+        return if (LLVMGetTypeKind(lengthType) == LLVMTypeKind.LLVMStructTypeKind) {
+            Struct(lengthType, llvm.constInt32(length))
+        } else {
+            llvm.constInt32(length)
+        }
     }
 
     private fun createConstant(value: ConstValue): ConstPointer {
@@ -60,7 +70,7 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
         val header = Struct(
                 llvm.structTypeWithFlexibleArray(runtime.stringHeaderType, data.size),
                 permanentTag(context.irBuiltIns.stringClass.owner.typeInfoPtr), // equivalent to CharArray
-                llvm.constInt32((runtime.stringHeaderExtraSize + data.size) / 2), // array size in Chars
+                arrayLength(runtime.stringHeaderType, (runtime.stringHeaderExtraSize + data.size) / 2), // array size in Chars
                 llvm.constInt32(hashCode),
                 // flags = HASHCODE_IS_ZERO or IGNORE_LAST_BYTE or (encoding shl ENCODING_OFFSET)
                 llvm.constInt16(((if (hashCode == 0) 1 else 0) or (2 * (encoded.size % 2)) or (encodingFlag shl 12)).toShort()),
