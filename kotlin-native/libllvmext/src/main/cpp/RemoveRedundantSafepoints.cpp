@@ -3,6 +3,7 @@
 // that can be found in the license/LICENSE.txt file.
 
 #include "RemoveRedundantSafepoints.h"
+#include "Passes/Frames.h"
 
 #include "CAPIExtensions.h"
 
@@ -126,4 +127,6 @@ void LLVMKotlinRemoveRedundantSafepoints(LLVMModuleRef M,
                                                   IsSafepointInliningAllowed);
     }
   }
+  // Kore: after the safepoints, which are calls the frames must be linked for.
+  llvm::kotlin::shrinkWrapFrames(*unwrap(M), /*Cleanup=*/true);
 }

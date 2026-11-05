@@ -2,6 +2,7 @@
 // the Apache 2.0 license that can be found in the license/LICENSE.txt file.
 
 #include "ObjectScalarReplacement.h"
+#include "Frames.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -823,13 +824,19 @@ PreservedAnalyses InlinePendingAllocationsPass::run(Module &M,
   // Kore: keep the body of the function prologue safepoint until the code
   // generator inlines it after the LTO pipeline (which would drop it otherwise,
   // leaving a call in every function).
-  if (Function *Prologue = M.getFunction("Kotlin_mm_safePointFunctionPrologue");
-      Prologue && !Prologue->isDeclaration()) {
+  for (StringRef Name : {"Kotlin_mm_safePointFunctionPrologue", "EnterFrame", "LeaveFrame"}) {
+    Function *Kept = M.getFunction(Name);
+    if (!Kept || Kept->isDeclaration())
+      continue;
     SmallVector<GlobalValue *> Used;
     collectUsedGlobalVariables(M, Used, /*CompilerUsed=*/false);
-    if (!is_contained(Used, Prologue))
-      appendToUsed(M, {Prologue});
+    if (!is_contained(Used, Kept))
+      appendToUsed(M, {Kept});
   }
+  // Kore: link GC frames only where needed, now that inlining is done and
+  // allocations are still recognizable calls (the rest of the pipeline
+  // optimizes the result).
+  shrinkWrapFrames(M, /*Cleanup=*/false);
   Function *Allocate = M.getFunction(AllocInstanceName);
   if (!Allocate)
     return PreservedAnalyses::all();

@@ -5,6 +5,7 @@
 #include "KotlinPlugin.h"
 
 #include "Passes/HideSymbols.h"
+#include "Passes/Frames.h"
 #include "Passes/LoopCallBonus.h"
 #include "Passes/LoopSafepoints.h"
 #include "Passes/ObjectScalarReplacement.h"
@@ -16,6 +17,8 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Process.h"
 
 #include <optional>
 
@@ -55,9 +58,40 @@ static auto parsePass(StringRef Name, StringRef PassName, F &&Parser)
   return std::make_optional(std::move(*Param));
 }
 
+// Kore: GC frame shrink-wrapping (Passes/Frames.h). Off: it slows down some
+// loops (frame calls kept opaque during inlining) more than it gains.
+static constexpr bool ShrinkWrapFrames = false;
+
+// Kore: optimizations LLVM has but does not enable by default (some of which
+// other compilers enable at their highest levels): constraint-based removal
+// of redundant (bounds) checks, jump threading of state machines, loop
+// interchange, flattening and unroll-and-jam, loop versioning for invariant
+// code motion, hoisting and sinking of common code, extra cleanups after
+// vectorization, and interprocedural register allocation.
+static void enableExtraOptimizations() {
+  static bool Done = false;
+  if (Done)
+    return;
+  Done = true;
+  if (sys::Process::GetEnv("KORE_NO_EXTRA_OPTS"))
+    return;
+  auto &Options = cl::getRegisteredOptions();
+  for (const char *Name :
+       {"enable-constraint-elimination", "enable-dfa-jump-thread",
+        "enable-loopinterchange", "enable-loop-flatten", "enable-unroll-and-jam",
+        "enable-loop-versioning-licm", "enable-gvn-hoist", "enable-gvn-sink",
+        "extra-vectorizer-passes", "enable-ipra",
+        "enable-interleaved-mem-accesses"}) {
+    auto It = Options.find(Name);
+    if (It != Options.end())
+      It->second->addOccurrence(0, Name, "true");
+  }
+}
+
 PassPluginLibraryInfo getKotlinPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "Kotlin", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
+            enableExtraOptimizations();
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &PM,
                    ArrayRef<PassBuilder::PipelineElement>) {
@@ -75,6 +109,9 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // still calls.
                   PM.addPass(ObjectScalarReplacementPass());
                   PM.addPass(LoopSafepointsPass());
+                  // Then place GC frames, now that safepoints are decided.
+                  if (ShrinkWrapFrames)
+                    PM.addPass(ShrinkWrapFramesPass());
                   // Then split loops into one without array bounds checks and
                   // (rarely run) ones with them, so that they can be vectorized.
                   PM.addPass(IRCEPass());
@@ -83,6 +120,8 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
             PB.registerPipelineEarlySimplificationEPCallback(
                 [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
                   PM.addPass(createModuleToFunctionPassAdaptor(LoopCallBonusPass()));
+                  if (ShrinkWrapFrames)
+                    PM.addPass(PendingFramesPass());
                 });
             // Kore: allocations stay calls until all inlining into their
             // functions is done.

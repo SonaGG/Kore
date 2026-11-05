@@ -226,7 +226,10 @@ LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
   // them itself, after removing redundant ones.
   auto IsSafepoint = [](const Function &F) {
     return F.getName() == "Kotlin_mm_safePointFunctionPrologue" ||
-           F.getName() == "Kotlin_mm_safePointWhileLoopBody";
+           F.getName() == "Kotlin_mm_safePointWhileLoopBody" ||
+           F.getName() == "EnterFrame" || F.getName() == "LeaveFrame" ||
+           F.getName() == "Kotlin_mm_switchThreadStateNative" ||
+           F.getName() == "Kotlin_mm_switchThreadStateRunnable";
   };
   auto MayInline = [&](const Function &F) {
     return !F.isDeclaration() && !F.isInterposable() &&
@@ -283,7 +286,10 @@ LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
     // the LTO pipeline, which drops `available_externally` bodies: give the
     // program copies of its own (internalized with the rest of the program).
     if (GO.getName() == "Kotlin_mm_safePointFunctionPrologue" ||
-        GO.getName() == "Kotlin_mm_safePointWhileLoopBody")
+        GO.getName() == "Kotlin_mm_safePointWhileLoopBody" ||
+        GO.getName() == "EnterFrame" || GO.getName() == "LeaveFrame" ||
+        GO.getName() == "Kotlin_mm_switchThreadStateNative" ||
+        GO.getName() == "Kotlin_mm_switchThreadStateRunnable")
       GO.setLinkage(GlobalValue::LinkOnceODRLinkage);
     else
       GO.setLinkage(GlobalValue::AvailableExternallyLinkage);
