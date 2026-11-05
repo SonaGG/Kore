@@ -173,6 +173,9 @@ size_t blockSize(size_t size) noexcept {
 struct BlockCache {
     std::mutex mutex;
     std::unordered_map<size_t, std::vector<void*>> blocks; // By block size.
+    // The block size of each large block in use: callers may free a block with a different size than they allocated
+    // it with (e.g. `SingleObjectPage` recomputes it from its object), which must not put it in the wrong size class.
+    std::unordered_map<void*, size_t> blockSizes;
     size_t bytes = 0;
 };
 
@@ -202,6 +205,8 @@ void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
         } else {
             memory = systemAlloc(block);
         }
+        std::unique_lock guard(cache.mutex);
+        cache.blockSizes[memory] = block;
     } else {
         memory = systemAlloc(size);
     }
@@ -213,14 +218,18 @@ void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
 void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
     CustomAllocDebug("Free(%p, %zu)", ptr, size);
     allocatedBytesCounter.fetch_sub(size, std::memory_order_relaxed);
-    if (size < kCachedBlockMinBytes) {
-        systemFree(ptr, size);
-        return;
-    }
-    size_t block = blockSize(size);
     auto& cache = blockCache();
+    size_t block;
     {
         std::unique_lock guard(cache.mutex);
+        auto it = cache.blockSizes.find(ptr);
+        if (it == cache.blockSizes.end()) {
+            guard.unlock();
+            systemFree(ptr, size);
+            return;
+        }
+        block = it->second;
+        cache.blockSizes.erase(it);
         if (cache.bytes + block <= kCachedBytesMax) {
             cache.blocks[block].push_back(ptr);
             cache.bytes += block;
