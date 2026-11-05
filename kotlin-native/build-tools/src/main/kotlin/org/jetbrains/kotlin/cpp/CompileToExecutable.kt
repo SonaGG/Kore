@@ -251,6 +251,12 @@ private fun buildClangFlags(configurables: Configurables): List<String> = mutabl
     require(configurables is ClangFlags)
     addAll(configurables.clangFlags)
     addAll(configurables.clangNooptFlags)
+    if (configurables.target.family == Family.MINGW) {
+        // Kore: Kotlin/Native binaries use native TLS on MinGW, but test executables also use libstdc++ features whose
+        // thread-locals are defined in the GCC-built libstdc++ with emulated TLS (`std::call_once` behind
+        // `std::future`). Production runtime code doesn't use them.
+        add("-femulated-tls")
+    }
     val targetTriple = if (configurables is AppleConfigurables) {
         configurables.targetTriple.withOSVersion(configurables.osVersionMin)
     } else {
