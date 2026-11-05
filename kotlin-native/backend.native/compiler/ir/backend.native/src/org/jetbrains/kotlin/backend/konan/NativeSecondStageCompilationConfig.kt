@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan
 
+import kotlinx.cinterop.toKString
 import com.google.common.base.StandardSystemProperty
 import com.intellij.openapi.project.Project
 import org.jetbrains.kotlin.backend.common.linkage.partial.partialLinkageConfig
@@ -752,3 +753,21 @@ private fun String.isRelease(): Boolean {
     return metaString.isEmpty() && build.isEmpty()
 }
 private const val KORE_TARGETED_INLINE_THRESHOLD = 40U
+
+// Kore: the CPU model and features to generate code for, see [BinaryOptions.cpu].
+internal val NativeSecondStageCompilationConfig.codegenCpu: String?
+    get() = when (val cpu = configuration.get(BinaryOptions.cpu)) {
+        null -> platform.targetCpu
+        "native" -> llvm.LLVMGetHostCPUName()?.let { name ->
+            try { name.toKString() } finally { llvm.LLVMDisposeMessage(name) }
+        }
+        else -> cpu
+    }
+
+internal val NativeSecondStageCompilationConfig.codegenCpuFeatures: String?
+    get() = when (configuration.get(BinaryOptions.cpu)) {
+        "native" -> llvm.LLVMGetHostCPUFeatures()?.let { features ->
+            try { features.toKString() } finally { llvm.LLVMDisposeMessage(features) }
+        }
+        else -> platform.targetCpuFeatures
+    }

@@ -6,6 +6,8 @@
 package org.jetbrains.kotlin.backend.konan.llvm
 
 import llvm.*
+import org.jetbrains.kotlin.backend.konan.codegenCpu
+import org.jetbrains.kotlin.backend.konan.codegenCpuFeatures
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.konan.target.Architecture
 import org.jetbrains.kotlin.konan.target.Family
@@ -26,10 +28,10 @@ internal fun addDefaultLlvmFunctionAttributes(context: Context, llvmFunction: LL
  * Set target cpu and its features to make LLVM generate correct machine code.
  */
 internal fun addTargetCpuAndFeaturesAttributes(context: Context, llvmFunction: LLVMValueRef) {
-    context.config.platform.targetCpu?.let {
+    context.config.codegenCpu?.let {
         LLVMAddTargetDependentFunctionAttr(llvmFunction, "target-cpu", it)
     }
-    context.config.platform.targetCpuFeatures?.let {
+    context.config.codegenCpuFeatures?.let {
         LLVMAddTargetDependentFunctionAttr(llvmFunction, "target-features", it)
     }
 }

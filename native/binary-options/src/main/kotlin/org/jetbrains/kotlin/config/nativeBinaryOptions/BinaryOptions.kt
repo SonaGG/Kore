@@ -65,6 +65,10 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: link optimized executables against a separately compiled, cached runtime (default: true).
     val precompileRuntime by booleanOption()
 
+    // Kore: the CPU to generate code for, as an LLVM CPU name (e.g. `x86-64-v3` for AVX2 and FMA), or `native` for the
+    // compiling machine's CPU. Unset: the target's baseline CPU.
+    val cpu by stringOption()
+
     val concurrentWeakSweep by booleanOption()
 
     val concurrentMarkMaxIterations by uintOption()

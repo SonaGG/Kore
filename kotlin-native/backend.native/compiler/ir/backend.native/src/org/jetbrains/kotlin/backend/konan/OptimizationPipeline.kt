@@ -89,14 +89,14 @@ data class LlvmPipelineConfig(
 private fun getCpuModel(context: NativeBackendPhaseContext): String {
     val target = context.config.target
     val configurables: Configurables = context.config.platform.configurables
-    return configurables.targetCpu ?: run {
+    return context.config.codegenCpu ?: run {
         context.diagnosticReporter.report(NativeBackendDiagnostics.LLVM_WARNING, "targetCpu for target $target was not set. Targeting `generic` cpu.")
         "generic"
     }
 }
 
 private fun getCpuFeatures(context: NativeBackendPhaseContext): String =
-        context.config.platform.configurables.targetCpuFeatures ?: ""
+        context.config.codegenCpuFeatures ?: ""
 
 private fun tryGetInlineThreshold(context: NativeBackendPhaseContext): Int? {
     val configurables: Configurables = context.config.platform.configurables
