@@ -6,6 +6,12 @@
 #include "ThreadData.hpp"
 #include "ThreadSuspension.hpp"
 
+#if KONAN_WINDOWS
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 #include <condition_variable>
 
 #include "CallsChecker.hpp"
@@ -49,6 +55,8 @@ PERFORMANCE_INLINE void mm::ThreadSuspensionData::MutatorPauseHandle::resume() n
 }
 
 kotlin::ThreadState kotlin::mm::ThreadSuspensionData::setState(kotlin::ThreadState newState) noexcept {
+    // Kore: the stack the GC scans while this thread is not runnable (see `saveStackPointer`).
+    if (newState == ThreadState::kNative) saveStackPointer();
     if (processBarrierAvailable()) {
         // Kore: only this thread writes its state. See `processBarrierAvailable`; the GC issues `processWideBarrier`
         // before it reads the state, after requesting a suspension or a safe point action.
@@ -156,4 +164,23 @@ void kotlin::mm::ResumeThreads() noexcept {
         internal::gSuspensionRequestReason.store(nullptr);
     }
     gSuspensionCondVar.notify_all();
+}
+
+uintptr_t kotlin::mm::ThreadSuspensionData::currentThreadStackBase() noexcept {
+#if KONAN_WINDOWS
+    return reinterpret_cast<uintptr_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
+#elif KONAN_APPLE
+    return reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
+#elif KONAN_LINUX
+    pthread_attr_t attributes;
+    void* address = nullptr;
+    size_t size = 0;
+    if (pthread_getattr_np(pthread_self(), &attributes) == 0) {
+        pthread_attr_getstack(&attributes, &address, &size);
+        pthread_attr_destroy(&attributes);
+    }
+    return reinterpret_cast<uintptr_t>(address) + size;
+#else
+    return 0; // Unknown: no conservative stack scanning.
+#endif
 }

@@ -77,6 +77,7 @@ extern const int32_t Kotlin_gcMarkSingleThreaded = 0;
 #endif
 extern const int32_t Kotlin_fixedBlockPageSize = 128;
 extern const int32_t Kotlin_gcYoungGenerationSize = 0; // Kore
+extern const int32_t Kotlin_gcNurserySize = 0; // Kore
 extern const int32_t Kotlin_pagedAllocator = 1;
 extern const int32_t Kotlin_latin1Strings = 1;
 

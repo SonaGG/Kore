@@ -54,6 +54,7 @@ public:
 
     class MarkTraits {
     public:
+        NO_INLINE static void reportUnconstructed(ObjHeader* object) noexcept;
         using MarkQueue = ParallelProcessor::Worker;
         using AnyQueue = ParallelProcessor::WorkSource;
 
@@ -93,6 +94,7 @@ public:
         }
 
         static PERFORMANCE_INLINE void processInMark(MarkQueue& markQueue, ObjHeader* object) noexcept {
+            if (__builtin_expect(reinterpret_cast<uintptr_t>(object->typeInfoOrMeta_) == 0, false)) reportUnconstructed(object);
             auto process = object->type_info()->processObjectInMark;
             RuntimeAssert(process != nullptr, "Got null processObjectInMark for object %p", object);
             process(static_cast<void*>(&markQueue), object);

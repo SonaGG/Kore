@@ -30,6 +30,7 @@ extern "C" const int32_t Kotlin_concurrentWeakSweep;
 extern "C" const int32_t Kotlin_gcMarkSingleThreaded;
 extern "C" const int32_t Kotlin_fixedBlockPageSize;
 extern "C" const int32_t Kotlin_gcYoungGenerationSize; // Kore
+extern "C" const int32_t Kotlin_gcNurserySize; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
 class SourceInfo;
@@ -85,6 +86,11 @@ ALWAYS_INLINE inline constexpr int32_t fixedBlockPageSize() noexcept {
 // Kore: young generation size in MiB for the generational GC; 0 selects the runtime default.
 ALWAYS_INLINE inline int32_t gcYoungGenerationSize() noexcept {
     return Kotlin_gcYoungGenerationSize;
+}
+
+// Kore: size of the moving young generation in MiB; 0 if there is none.
+ALWAYS_INLINE inline int32_t gcNurserySize() noexcept {
+    return Kotlin_gcNurserySize;
 }
 ALWAYS_INLINE inline bool pagedAllocator() noexcept {
     return Kotlin_pagedAllocator != 0;

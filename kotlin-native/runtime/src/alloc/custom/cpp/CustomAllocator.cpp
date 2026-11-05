@@ -33,9 +33,13 @@ ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
     RuntimeAssert(!typeInfo->IsArray(), "Must not be an array");
     auto descriptor = CustomHeapObject::descriptorFrom(typeInfo);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
-    auto& heapObject = *descriptor.construct(Allocate(size));
+    bool hasFinalizer = typeInfo->flags_ & TF_HAS_FINALIZER;
+    // Kore: objects with finalizers never move (their extra object data points back to them).
+    uint8_t* memory = hasFinalizer ? nullptr : TryAllocateInNursery(size);
+    if (memory == nullptr) memory = Allocate(size);
+    auto& heapObject = *descriptor.construct(memory);
     ObjHeader* object = heapObject.object();
-    if (typeInfo->flags_ & TF_HAS_FINALIZER) {
+    if (hasFinalizer) {
         auto* extraObject = CreateExtraObjectDataForObject(object, typeInfo);
         object->typeInfoOrMeta_ = reinterpret_cast<TypeInfo*>(extraObject);
         CustomAllocDebug("CustomAllocator: %p gets extraObject %p", object, extraObject);
@@ -51,7 +55,9 @@ ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t cou
     RuntimeAssert(typeInfo->IsArray(), "Must be an array");
     auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
-    auto& heapArray = *descriptor.construct(Allocate(size));
+    uint8_t* memory = TryAllocateInNursery(size);
+    if (memory == nullptr) memory = Allocate(size);
+    auto& heapArray = *descriptor.construct(memory);
     ArrayHeader* array = heapArray.array();
     array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
     array->count_ = count;
@@ -68,8 +74,33 @@ FinalizerQueue CustomAllocator::ExtractFinalizerQueue() noexcept {
     return std::move(finalizerQueue_);
 }
 
+void CustomAllocator::RetireNursery() noexcept {
+    if (nurseryStart_ == nullptr) return;
+    Nursery::instance()->retire(nurseryStart_, nurseryTop_);
+    nurseryStart_ = nurseryTop_ = nurseryEnd_ = nullptr;
+}
+
+uint8_t* CustomAllocator::RefillNursery(size_t bytes) noexcept {
+    if (bytes > Nursery::kMaxObjectBytes) return nullptr;
+    RetireNursery();
+    // Notify first: the scheduler may suspend this thread for a collection, which must not see a block owned by it
+    // (with an object not constructed yet), and may free the blocks.
+    heap_.allocatedSizeTracker().recordDifferenceAndNotifyScheduler(static_cast<std::ptrdiff_t>(Nursery::kBlockSize));
+    uint8_t* start;
+    uint8_t* end;
+    if (!Nursery::instance()->takeBlock(start, end)) {
+        heap_.allocatedSizeTracker().recordDifference(-static_cast<std::ptrdiff_t>(Nursery::kBlockSize));
+        return nullptr;
+    }
+    nurseryStart_ = start;
+    nurseryTop_ = start + bytes;
+    nurseryEnd_ = end;
+    return start;
+}
+
 void CustomAllocator::PrepareForGC() noexcept {
     CustomAllocInfo("CustomAllocator@%p::PrepareForGC()", this);
+    RetireNursery();
     nextFitPage_ = nullptr;
     memset(fixedBlockPages_, 0, sizeof(fixedBlockPages_));
     extraObjectPage_ = nullptr;

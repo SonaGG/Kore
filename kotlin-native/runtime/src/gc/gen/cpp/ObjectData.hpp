@@ -71,6 +71,17 @@ public:
 
     void forget() noexcept { word_.fetch_and(~kRemembered, std::memory_order_relaxed); }
 
+    // Kore: the moving young generation. Nursery objects are never old, so during the evacuation of a young collection
+    // `kOld` marks a moved object, whose word then holds its new address.
+    void forwardTo(ObjHeader* to) noexcept { word_.store(reinterpret_cast<uintptr_t>(to) | kOld, std::memory_order_relaxed); }
+    bool forwarded() const noexcept { return (word_.load(std::memory_order_relaxed) & kOld) != 0; }
+    ObjHeader* forwardee() const noexcept {
+        return reinterpret_cast<ObjHeader*>(word_.load(std::memory_order_relaxed) & ~uintptr_t(7));
+    }
+    // Sets the whole word (world stopped): `kOld` for an object promoted in place, 0 for a dead one.
+    void reset(uintptr_t word) noexcept { word_.store(word, std::memory_order_relaxed); }
+    uintptr_t word() const noexcept { return word_.load(std::memory_order_relaxed); }
+
 private:
     friend struct DefaultIntrusiveForwardListTraits<ObjectData>;
 

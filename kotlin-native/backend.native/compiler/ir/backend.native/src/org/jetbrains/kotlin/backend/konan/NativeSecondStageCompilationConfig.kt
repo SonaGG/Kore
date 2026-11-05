@@ -242,6 +242,10 @@ class NativeSecondStageCompilationConfig(
     val gcYoungGenerationSize: UInt
         get() = configuration.get(BinaryOptions.gcYoungGenerationSize) ?: 0u
 
+    // Kore: the moving young generation, in MiB (0: none). Only with the generational GC.
+    val gcNurserySize: UInt
+        get() = if (gc == GC.GENERATIONAL_MARK_AND_SWEEP) configuration.get(BinaryOptions.gcNurserySize) ?: 0u else 0u
+
     // Kore: 0 means automatic.
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u

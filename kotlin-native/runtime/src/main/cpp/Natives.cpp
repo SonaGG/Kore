@@ -24,6 +24,7 @@
 #include <type_traits>
 
 #include "Alignment.hpp"
+#include "Allocator.hpp"
 #include "KAssert.h"
 #include "KString.h"
 #include "StackTrace.hpp"
@@ -45,6 +46,8 @@ KInt Kotlin_Any_hashCode(KConstRef thiz) {
   //        it should be very cheap to call in order not to pollute the time measurements.
   // Here we will use different mechanism for stable hashcode, using meta-objects
   // if moving collector will be used.
+  // Kore: with the moving young generation, an object whose identity hash code is taken stays in place.
+  if (__builtin_expect(kotlin::alloc::nursery::movable(thiz), false)) kotlin::alloc::nursery::pin(thiz);
   return reinterpret_cast<uintptr_t>(thiz);
 }
 

@@ -16,7 +16,13 @@ using namespace kotlin;
 
 alloc::Allocator::ThreadData::ThreadData(Allocator& allocator) noexcept : impl_(std::make_unique<Impl>(allocator.impl())) {}
 
-alloc::Allocator::ThreadData::~ThreadData() = default;
+alloc::Allocator::ThreadData::~ThreadData() {
+    // Kore: hand the nursery block back (under the GC lock: the thread is native, a collection may be running).
+    if (Nursery::instance() != nullptr) {
+        auto lock = mm::GlobalData::Instance().gc().gcLock();
+        impl_->alloc().RetireNursery();
+    }
+}
 
 PERFORMANCE_INLINE ObjHeader* alloc::Allocator::ThreadData::allocateObject(const TypeInfo* typeInfo) noexcept {
     return impl_->alloc().CreateObject(typeInfo);
@@ -154,4 +160,99 @@ void alloc::destroyExtraObjectData(mm::ExtraObjectData& extraObject) noexcept {
         // GC sweep will just collect this extra object.
         extraObject.setFlag(mm::ExtraObjectData::FLAGS_SWEEPABLE);
     }
+}
+
+// Kore: the moving young generation.
+
+uint8_t* alloc::Allocator::allocateForEvacuation(size_t bytes) noexcept {
+    return impl_->evacuationAllocator().AllocateForEvacuation(AllocationSize::bytesAtLeast(bytes));
+}
+
+void alloc::Allocator::finishEvacuation() noexcept {
+    impl_->evacuationAllocator().PrepareForGC();
+}
+
+namespace {
+
+void recordReleasedNurseryBlocks(size_t blocks) noexcept {
+    if (blocks == 0) return;
+    mm::GlobalData::Instance().allocator().impl().heap().allocatedSizeTracker().recordDifference(
+            -static_cast<std::ptrdiff_t>(blocks * alloc::Nursery::kBlockSize));
+}
+
+} // namespace
+
+bool alloc::nursery::enabled() noexcept {
+    return Nursery::instance() != nullptr;
+}
+
+bool alloc::nursery::movable(const ObjHeader* object) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery != nullptr && nursery->movable(object);
+}
+
+void alloc::nursery::pin(const ObjHeader* object) noexcept {
+    Nursery::instance()->pin(object);
+}
+
+bool alloc::nursery::pinned(const ObjHeader* object) noexcept {
+    return Nursery::instance()->pinned(object);
+}
+
+void alloc::nursery::setAllocationEnabled(bool enabled) noexcept {
+    if (auto* nursery = Nursery::instance()) nursery->setAllocationEnabled(enabled);
+}
+
+void alloc::nursery::retireAll() noexcept {
+    if (Nursery::instance() == nullptr) return;
+    for (auto& thread : mm::ThreadRegistry::Instance().LockForIter()) {
+        thread.allocator().impl().alloc().RetireNursery();
+    }
+}
+
+ObjHeader* alloc::nursery::movableObjectContaining(uintptr_t address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery == nullptr ? nullptr : nursery->objectContaining(address, Nursery::BlockState::kFull);
+}
+
+void alloc::nursery::forEachMovableObject(const std::function<void(ObjHeader*)>& process) noexcept {
+    if (auto* nursery = Nursery::instance()) nursery->forEachObject(Nursery::BlockState::kFull, process);
+}
+
+void alloc::nursery::retain(const ObjHeader* object) noexcept {
+    Nursery::instance()->retain(object);
+}
+
+void alloc::nursery::finishYoungCollection() noexcept {
+    if (auto* nursery = Nursery::instance()) recordReleasedNurseryBlocks(nursery->finishYoungCollection());
+}
+
+bool alloc::nursery::inRetainedBlock(const void* address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery != nullptr && nursery->contains(address) &&
+            nursery->state(nursery->blockOf(address)) == Nursery::BlockState::kRetained;
+}
+
+ObjHeader* alloc::nursery::retainedObjectContaining(uintptr_t address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery == nullptr ? nullptr : nursery->objectContaining(address, Nursery::BlockState::kRetained);
+}
+
+void alloc::nursery::forEachRetainedObject(const std::function<void(ObjHeader*)>& process) noexcept {
+    if (auto* nursery = Nursery::instance()) nursery->forEachObject(Nursery::BlockState::kRetained, process);
+}
+
+void alloc::nursery::releaseEmptyRetainedBlocks(const std::function<bool(ObjHeader*)>& alive) noexcept {
+    if (auto* nursery = Nursery::instance()) recordReleasedNurseryBlocks(nursery->releaseEmptyRetainedBlocks(alive));
+}
+
+size_t alloc::nursery::activeBlocks() noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery == nullptr ? 0 : nursery->countBlocks(Nursery::BlockState::kActive);
+}
+
+bool alloc::nursery::inFreeBlock(const void* address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery != nullptr && nursery->contains(address) &&
+            nursery->state(nursery->blockOf(address)) == Nursery::BlockState::kFree;
 }

@@ -68,6 +68,10 @@ private:
     void collectRememberedSets(RememberedSet& into) noexcept;
     void keepLiveRememberedSetEntries() noexcept;
     void markRememberedSet(mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet) noexcept;
+    // Kore: the moving young generation (world stopped).
+    void pinNurseryRoots(std::vector<ObjHeader*>& stackReferenced) noexcept;
+    void evacuateNursery() noexcept;
+    void finishNurseryAfterFullMark() noexcept;
 
     alloc::Allocator& allocator_;
     gcScheduler::GCScheduler& gcScheduler_;

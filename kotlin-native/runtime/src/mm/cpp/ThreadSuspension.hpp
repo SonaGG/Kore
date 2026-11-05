@@ -44,14 +44,39 @@ private:
     };
 
 public:
-    explicit ThreadSuspensionData(ThreadState initialState, mm::ThreadData& threadData) noexcept : state_(initialState), threadData_(threadData) {}
+    explicit ThreadSuspensionData(ThreadState initialState, mm::ThreadData& threadData) noexcept :
+        state_(initialState), threadData_(threadData), stackBase_(currentThreadStackBase()), savedStackPointer_(stackBase_) {}
+
+    // Kore: conservative stack scanning. The stack of a thread that is not running Kotlin code (suspended or native) is
+    // `[savedStackPointer(), stackBase())`; the stack pointer is saved whenever the thread leaves the runnable state.
+    uintptr_t stackBase() const noexcept { return stackBase_; }
+    uintptr_t savedStackPointer() const noexcept { return savedStackPointer_.load(std::memory_order_relaxed); }
+    ALWAYS_INLINE void saveStackPointer() noexcept { savedStackPointer_.store(currentStackPointer(), std::memory_order_relaxed); }
+
+    ALWAYS_INLINE static uintptr_t currentStackPointer() noexcept {
+#if defined(__x86_64__)
+        uintptr_t sp;
+        asm volatile("movq %%rsp, %0" : "=r"(sp));
+        return sp;
+#elif defined(__aarch64__)
+        uintptr_t sp;
+        asm volatile("mov %0, sp" : "=r"(sp));
+        return sp;
+#else
+        return reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+#endif
+    }
+    static uintptr_t currentThreadStackBase() noexcept;
 
     ~ThreadSuspensionData() = default;
 
     ThreadState state() noexcept { return state_; }
 
     ThreadState setState(ThreadState newState) noexcept;
-    ThreadState setStateNoSafePoint(ThreadState newState) noexcept { return state_.exchange(newState, std::memory_order_acq_rel); }
+    ThreadState setStateNoSafePoint(ThreadState newState) noexcept {
+        if (newState == ThreadState::kNative) saveStackPointer();
+        return state_.exchange(newState, std::memory_order_acq_rel);
+    }
 
     bool suspendedOrNative() noexcept { return state() == kotlin::ThreadState::kNative; }
 
@@ -73,6 +98,8 @@ public:
 private:
     std::atomic<ThreadState> state_;
     mm::ThreadData& threadData_;
+    const uintptr_t stackBase_;
+    std::atomic<uintptr_t> savedStackPointer_;
 };
 
 /**

@@ -17,14 +17,19 @@ namespace kotlin::alloc {
 
 class Allocator::Impl : private Pinned {
 public:
-    Impl() noexcept : finalizerProcessor_([](int64_t epoch) noexcept { mm::GlobalData::Instance().gc().onEpochFinalized(epoch); }) {}
+    Impl() noexcept : finalizerProcessor_([](int64_t epoch) noexcept { mm::GlobalData::Instance().gc().onEpochFinalized(epoch); }) {
+        Nursery::initialize();
+    }
 
     Heap& heap() noexcept { return heap_; }
     FinalizerQueue& pendingFinalizers() noexcept { return pendingFinalizers_; }
     SegregatedFinalizerProcessor<FinalizerQueueSingle, FinalizerQueueTraits>& finalizerProcessor() noexcept { return finalizerProcessor_; }
+    // Kore: the GC thread's allocator for objects moved out of the nursery.
+    CustomAllocator& evacuationAllocator() noexcept { return evacuationAllocator_; }
 
 private:
     Heap heap_;
+    CustomAllocator evacuationAllocator_{heap_};
     // Preallocated place for finalizers for avoiding memory allocation during GC.
     FinalizerQueue pendingFinalizers_;
     SegregatedFinalizerProcessor<FinalizerQueueSingle, FinalizerQueueTraits> finalizerProcessor_;
