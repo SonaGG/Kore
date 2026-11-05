@@ -130,7 +130,8 @@ class NativeSecondStageCompilationConfig(
         return@takeIf true
     }
 
-    private val defaultGC get() = GC.CONCURRENT_MARK_AND_SWEEP
+    // Kore: the generational GC (young collections, cheaper barriers for stack objects).
+    private val defaultGC get() = GC.GENERATIONAL_MARK_AND_SWEEP
     val gc: GC
         get() = configuration.get(BinaryOptions.gc) ?: defaultGC
     val runtimeAssertsMode: RuntimeAssertsMode get() = configuration.get(BinaryOptions.runtimeAssertionsMode) ?: RuntimeAssertsMode.IGNORE
