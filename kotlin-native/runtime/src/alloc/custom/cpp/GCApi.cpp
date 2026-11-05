@@ -10,6 +10,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #ifndef KONAN_WINDOWS
 #include <sys/mman.h>
@@ -106,7 +109,7 @@ kotlin::alloc::AllocationSize kotlin::alloc::ExtraDataSweepTraits::elementSize(u
     return ExtraObjectCell::size();
 }
 
-void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
+static void* systemAlloc(uint64_t size) noexcept {
     if (size > std::numeric_limits<size_t>::max()) {
         konan::consoleErrorf("Out of memory trying to allocate %" PRIu64 " bytes. Aborting.\n", size);
         std::abort();
@@ -135,13 +138,10 @@ void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
         konan::consoleErrorf("Out of memory trying to allocate %" PRIu64 " bytes: %s. Aborting.\n", size, strerror(errno));
         std::abort();
     }
-    allocatedBytesCounter.fetch_add(static_cast<size_t>(size), std::memory_order_relaxed);
-    CustomAllocDebug("SafeAlloc(%zu) = %p", static_cast<size_t>(size), memory);
     return memory;
 }
 
-void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
-    CustomAllocDebug("Free(%p, %zu)", ptr, size);
+static void systemFree(void* ptr, size_t size) noexcept {
     if (kotlin::compiler::disableMmap()) {
         free(ptr);
     } else {
@@ -152,7 +152,82 @@ void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
         RuntimeAssert(result == 0, "Failed to munmap: %s", strerror(errno));
 #endif
     }
-    allocatedBytesCounter.fetch_sub(static_cast<size_t>(size), std::memory_order_relaxed);
+}
+
+namespace {
+
+// Kore: freed large blocks (pages of large objects, which are allocated and freed per object, e.g. the arrays of
+// growing lists) are kept for reuse, up to a bound, instead of going back to the system: reusing them saves the
+// system calls and the page faults (and zeroing by the system) of fresh memory. Large blocks have size classes (four
+// per power of two), so that a block fits allocations of similar sizes.
+constexpr size_t kCachedBlockMinBytes = 64 * 1024;
+constexpr size_t kCachedBytesMax = 64 * 1024 * 1024;
+
+size_t blockSize(size_t size) noexcept {
+    if (size < kCachedBlockMinBytes) return size;
+    size_t power = size_t(1) << (63 - __builtin_clzll(size));
+    size_t step = power / 4;
+    return (size + step - 1) / step * step;
+}
+
+struct BlockCache {
+    std::mutex mutex;
+    std::unordered_map<size_t, std::vector<void*>> blocks; // By block size.
+    size_t bytes = 0;
+};
+
+BlockCache& blockCache() noexcept {
+    [[clang::no_destroy]] static BlockCache cache;
+    return cache;
+}
+
+} // namespace
+
+void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
+    void* memory = nullptr;
+    if (size >= kCachedBlockMinBytes && size <= std::numeric_limits<size_t>::max()) {
+        size_t block = blockSize(static_cast<size_t>(size));
+        auto& cache = blockCache();
+        {
+            std::unique_lock guard(cache.mutex);
+            auto it = cache.blocks.find(block);
+            if (it != cache.blocks.end() && !it->second.empty()) {
+                memory = it->second.back();
+                it->second.pop_back();
+                cache.bytes -= block;
+            }
+        }
+        if (memory != nullptr) {
+            std::memset(memory, 0, static_cast<size_t>(size));
+        } else {
+            memory = systemAlloc(block);
+        }
+    } else {
+        memory = systemAlloc(size);
+    }
+    allocatedBytesCounter.fetch_add(static_cast<size_t>(size), std::memory_order_relaxed);
+    CustomAllocDebug("SafeAlloc(%zu) = %p", static_cast<size_t>(size), memory);
+    return memory;
+}
+
+void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
+    CustomAllocDebug("Free(%p, %zu)", ptr, size);
+    allocatedBytesCounter.fetch_sub(size, std::memory_order_relaxed);
+    if (size < kCachedBlockMinBytes) {
+        systemFree(ptr, size);
+        return;
+    }
+    size_t block = blockSize(size);
+    auto& cache = blockCache();
+    {
+        std::unique_lock guard(cache.mutex);
+        if (cache.bytes + block <= kCachedBytesMax) {
+            cache.blocks[block].push_back(ptr);
+            cache.bytes += block;
+            return;
+        }
+    }
+    systemFree(ptr, block);
 }
 
 size_t kotlin::alloc::GetAllocatedBytes() noexcept {
