@@ -6,7 +6,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "GC.hpp"
 #include "GCStatistics.hpp"
@@ -49,6 +51,19 @@ public:
     Impl& impl() noexcept { return *impl_; }
 
     void prepareForGC() noexcept;
+
+    // Kore: generational GC support. Like prepareForGC, but only the part of the heap allocated into since the
+    // previous collection will be swept. Requires a GC whose marks are sticky (never reset by the sweeper).
+    void prepareForYoungGC() noexcept;
+
+    // Kore: generational GC support. Sorts `slots`, then calls `process(slot, object)` for every slot that lies
+    // inside an allocated heap object. Other addresses (stack objects, globals, thread-locals) are skipped.
+    // Must be called with the world stopped.
+    void forEachHeapSlot(std::vector<ObjHeader**>& slots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept;
+
+    // Kore: bytes of heap objects as reported to the GC scheduler (after a sweep: the bytes kept in the whole heap,
+    // including pages a young-generation collection did not sweep).
+    size_t objectBytes() noexcept;
 
     // TODO: Move into AllocatorTestSupport.hpp
     void clearForTests() noexcept;

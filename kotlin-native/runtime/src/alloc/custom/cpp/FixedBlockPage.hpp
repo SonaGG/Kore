@@ -93,6 +93,7 @@ public:
         }
 
         allocatedSizeTracker_.afterSweep(aliveBlocksCount * blockSize_ * sizeof(FixedBlockCell));
+        liveFraction_ = end_ == 0 ? 1.0f : static_cast<float>(aliveBlocksCount * blockSize_) / static_cast<float>(end_);
 
         // The page is alive iff a range stored in the page header covers the entire page.
         return nextFree_.first > 0 || nextFree_.last < end_;
@@ -113,6 +114,21 @@ public:
         }
     }
 
+    // Kore: fraction of the page occupied by objects that survived the last sweep.
+    float LiveFraction() const noexcept { return liveFraction_; }
+
+    // Kore: first and one-past-last byte this page may hold objects in.
+    const uint8_t* BlocksBegin() const noexcept { return reinterpret_cast<const uint8_t*>(cells_); }
+    const uint8_t* BlocksEnd() const noexcept { return reinterpret_cast<const uint8_t*>(cells_ + end_); }
+
+    // Kore: the block containing `address`, which must be in [BlocksBegin(), BlocksEnd()).
+    // Does not check whether the block is allocated.
+    uint8_t* BlockContaining(const void* address) noexcept {
+        auto offset = static_cast<size_t>(reinterpret_cast<const uint8_t*>(address) - BlocksBegin());
+        auto cell = static_cast<uint32_t>(offset / sizeof(FixedBlockCell));
+        return cells_[cell - cell % blockSize_].data;
+    }
+
     // Testing method
     std::vector<uint8_t*> GetAllocatedBlocks() noexcept;
 
@@ -122,6 +138,7 @@ private:
     FixedCellRange nextFree_;
     uint32_t blockSize_;
     uint32_t end_;
+    float liveFraction_ = 0; // Kore
     FixedBlockCell cells_[];
 };
 

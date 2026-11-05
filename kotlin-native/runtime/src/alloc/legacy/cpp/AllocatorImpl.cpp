@@ -5,6 +5,8 @@
 
 #include "AllocatorImpl.hpp"
 
+#include <algorithm>
+
 #include "Allocator.hpp"
 #include "ExtraObjectDataFactory.hpp"
 #include "GC.hpp"
@@ -83,6 +85,42 @@ void alloc::Allocator::prepareForGC() noexcept {
     RuntimeAssert(!impl_->sweepState().has_value(), "sweepState must be empty");
     impl_->sweepState().emplace(impl_->objectFactory(), impl_->extraObjectDataFactory());
     checkMarkCorrectness(impl_->sweepState()->objectFactoryIterable_);
+}
+
+// Kore: the legacy allocator has no page structure to exploit, so a young collection sweeps the whole heap. That is
+// still correct for a sticky-mark generational GC: old objects stay marked, and only unmarked (young) ones are freed.
+size_t alloc::Allocator::objectBytes() noexcept {
+    return alloc::allocatedBytes();
+}
+
+void alloc::Allocator::prepareForYoungGC() noexcept {
+    prepareForGC();
+}
+
+void alloc::Allocator::forEachHeapSlot(
+        std::vector<ObjHeader**>& slots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
+    if (slots.empty()) return;
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    struct Range {
+        uintptr_t begin;
+        uintptr_t end;
+        ObjHeader* object;
+    };
+    std::vector<Range> objects;
+    for (auto node : impl_->objectFactory().LockForIter()) {
+        auto* object = node.GetObjHeader();
+        auto begin = reinterpret_cast<uintptr_t>(object);
+        objects.push_back({begin, begin + ObjectFactoryImpl::GetAllocatedHeapSize(object), object});
+    }
+    std::sort(objects.begin(), objects.end(), [](const Range& lhs, const Range& rhs) { return lhs.begin < rhs.begin; });
+    for (auto* slot : slots) {
+        auto address = reinterpret_cast<uintptr_t>(slot);
+        auto it = std::upper_bound(objects.begin(), objects.end(), address, [](uintptr_t value, const Range& range) { return value < range.begin; });
+        if (it == objects.begin()) continue;
+        --it;
+        if (address < it->end) process(slot, it->object);
+    }
 }
 
 void alloc::Allocator::clearForTests() noexcept {

@@ -9,6 +9,8 @@
 #include <atomic>
 #include <mutex>
 #include <cstring>
+#include <functional>
+#include <vector>
 
 #include "AtomicStack.hpp"
 #include "ExtraObjectData.hpp"
@@ -26,6 +28,15 @@ class Heap {
 public:
     // Called once by the GC thread after all mutators have been suspended
     void PrepareForGC() noexcept;
+
+    // Kore: like PrepareForGC, but for a young-generation collection: only pages allocated into since the previous
+    // collection will be swept. Requires a sticky-mark generational GC (marks of survivors are never reset).
+    void PrepareForYoungGC() noexcept;
+
+    // Kore: for every address in `sortedSlots` (ascending) that lies inside an allocated heap object, calls
+    // `process(slot, object)`. Addresses outside the object heap (stack objects, globals, thread-locals) are skipped.
+    // Must be called with the world stopped.
+    void ForEachHeapSlot(const std::vector<ObjHeader**>& sortedSlots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept;
 
     // Sweep through all remaining pages, freeing those blocks where CanReclaim
     // returns true. If multiple sweepers are active, each page will only be

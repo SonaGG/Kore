@@ -71,6 +71,7 @@ public:
         RuntimeAssert(aliveBytes == GetAllocatedSizeBytes(),
                       "Sweep counted %zu alive bytes, while GetAllocatedSizeBytes() returns %zu", aliveBytes, GetAllocatedSizeBytes());
         allocatedSizeTracker_.afterSweep(aliveBytes);
+        liveFraction_ = static_cast<float>(aliveBytes) / static_cast<float>(SIZE);
 
         return aliveBytes > 0;
     }
@@ -83,6 +84,25 @@ public:
                 process(block->data_);
             }
         }
+    }
+
+    // Kore: fraction of the page occupied by objects that survived the last sweep.
+    float LiveFraction() const noexcept { return liveFraction_; }
+
+    // Kore: first and one-past-last byte this page may hold objects in.
+    const uint8_t* BlocksBegin() const noexcept { return reinterpret_cast<const uint8_t*>(cells_ + 1); }
+    const uint8_t* BlocksEnd() const noexcept { return reinterpret_cast<const uint8_t*>(cells_ + cellCount()); }
+
+    // Kore: the allocated block containing `address`, or nullptr if `address` is in a free block.
+    // `address` must be in [BlocksBegin(), BlocksEnd()). Linear in the number of blocks before `address`.
+    uint8_t* BlockContaining(const void* address) noexcept {
+        Cell* end = cells_ + cellCount();
+        for (Cell* block = cells_ + 1; block != end; block = block->Next()) {
+            if (reinterpret_cast<const uint8_t*>(address) < reinterpret_cast<const uint8_t*>(block->Next())) {
+                return block->isAllocated_ ? block->data_ : nullptr;
+            }
+        }
+        return nullptr;
     }
 
     // Testing method
@@ -101,6 +121,7 @@ private:
     std::size_t GetAllocatedSizeBytes() noexcept;
 
     Cell* curBlock_;
+    float liveFraction_ = 0; // Kore
     Cell cells_[]; // cells_[0] is reserved for an empty block
 };
 

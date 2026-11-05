@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <algorithm>
 #include <cinttypes>
 #include <new>
 #include <vector>
@@ -30,6 +31,76 @@ void Heap::PrepareForGC() noexcept {
     }
     fixedBlockExtraObjectPages_.PrepareForGC();
     singleExtraObjectPages_.PrepareForGC();
+}
+
+void Heap::PrepareForYoungGC() noexcept {
+    CustomAllocDebug("Heap::PrepareForYoungGC()");
+    nextFitPages_.PrepareForYoungGC();
+    singleObjectPages_.PrepareForYoungGC();
+    for (int blockSize = 0; blockSize <= FixedBlockPage::MAX_BLOCK_SIZE; ++blockSize) {
+        fixedBlockPages_[blockSize].PrepareForYoungGC();
+    }
+    fixedBlockExtraObjectPages_.PrepareForYoungGC();
+    singleExtraObjectPages_.PrepareForYoungGC();
+}
+
+namespace {
+
+struct PageRange {
+    enum class Kind { kFixedBlock, kNextFit, kSingleObject };
+
+    const uint8_t* begin;
+    const uint8_t* end;
+    Kind kind;
+    void* page;
+};
+
+} // namespace
+
+void Heap::ForEachHeapSlot(
+        const std::vector<ObjHeader**>& sortedSlots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
+    if (sortedSlots.empty()) return;
+
+    std::vector<PageRange> ranges;
+    for (int blockSize = 0; blockSize <= FixedBlockPage::MAX_BLOCK_SIZE; ++blockSize) {
+        fixedBlockPages_[blockSize].TraversePages([&](FixedBlockPage* page) {
+            ranges.push_back({page->BlocksBegin(), page->BlocksEnd(), PageRange::Kind::kFixedBlock, page});
+        });
+    }
+    nextFitPages_.TraversePages([&](NextFitPage* page) {
+        ranges.push_back({page->BlocksBegin(), page->BlocksEnd(), PageRange::Kind::kNextFit, page});
+    });
+    singleObjectPages_.TraversePages([&](SingleObjectPage* page) {
+        auto* data = page->Data();
+        ranges.push_back({data, data + ObjectSweepTraits::elementSize(data).inBytes(), PageRange::Kind::kSingleObject, page});
+    });
+    std::sort(ranges.begin(), ranges.end(), [](const PageRange& lhs, const PageRange& rhs) { return lhs.begin < rhs.begin; });
+
+    auto range = ranges.begin();
+    for (ObjHeader** slot : sortedSlots) {
+        auto* address = reinterpret_cast<const uint8_t*>(slot);
+        while (range != ranges.end() && range->end <= address) ++range;
+        if (range == ranges.end()) break;
+        if (address < range->begin) continue; // Not in the object heap.
+
+        uint8_t* block = nullptr;
+        switch (range->kind) {
+            case PageRange::Kind::kFixedBlock:
+                block = static_cast<FixedBlockPage*>(range->page)->BlockContaining(address);
+                break;
+            case PageRange::Kind::kNextFit:
+                block = static_cast<NextFitPage*>(range->page)->BlockContaining(address);
+                break;
+            case PageRange::Kind::kSingleObject:
+                block = static_cast<SingleObjectPage*>(range->page)->Data();
+                break;
+        }
+        if (block == nullptr) continue;
+        auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
+        // Free fixed blocks are zeroed (apart from free-list links stored in the GC header word).
+        if (object->typeInfoOrMetaRelaxed() == nullptr) continue;
+        process(slot, object);
+    }
 }
 
 FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle) noexcept {

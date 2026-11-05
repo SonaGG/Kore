@@ -24,6 +24,17 @@ public:
     void PrepareForGC() noexcept {
         unswept_.TransferAllFrom(std::move(ready_));
         unswept_.TransferAllFrom(std::move(used_));
+        unswept_.TransferAllFrom(std::move(parked_));
+        T* page;
+        while ((page = empty_.Pop())) page->Destroy();
+    }
+
+    // Kore: young-generation collection (generational GC with sticky marks). Pages in `ready_` were swept by the
+    // previous collection and have not been allocated into since, so they hold only objects that survived it, i.e.
+    // old objects. Only pages handed out since the previous collection (`used_`) can hold young objects.
+    void PrepareForYoungGC() noexcept {
+        generational_.store(true, std::memory_order_relaxed);
+        unswept_.TransferAllFrom(std::move(used_));
         T* page;
         while ((page = empty_.Pop())) page->Destroy();
     }
@@ -35,7 +46,14 @@ public:
 
     T* GetPage(uint32_t cellCount, FinalizerQueue& finalizerQueue, std::atomic<std::size_t>& concurrentSweepersCount_) noexcept {
         T* page;
-        if ((page = ready_.Pop())) {
+        while ((page = ready_.Pop())) {
+            // Kore: with a generational GC, every page handed out here is swept by the next young collection, old
+            // objects included. Don't allocate young objects into mostly-old pages; leave them for the next full
+            // collection.
+            if (generational_.load(std::memory_order_relaxed) && page->LiveFraction() > kMaxLiveFractionForYoungAllocation) {
+                parked_.Push(page);
+                continue;
+            }
             used_.Push(page);
             return page;
         }
@@ -71,7 +89,8 @@ public:
         return empty_.isEmpty() &&
             ready_.isEmpty() &&
             used_.isEmpty() &&
-            unswept_.isEmpty();
+            unswept_.isEmpty() &&
+            parked_.isEmpty();
     }
 
     ~PageStore() noexcept {
@@ -101,6 +120,7 @@ private:
         for (T* page : ready_.GetElements()) pages.push_back(page);
         for (T* page : used_.GetElements()) pages.push_back(page);
         for (T* page : unswept_.GetElements()) pages.push_back(page);
+        for (T* page : parked_.GetElements()) pages.push_back(page);
         return pages;
     }
 
@@ -109,6 +129,8 @@ private:
         while (T* page = ready_.Pop()) page->Destroy();
         while (T* page = used_.Pop()) page->Destroy();
         while (T* page = unswept_.Pop()) page->Destroy();
+        while (T* page = parked_.Pop()) page->Destroy();
+        generational_.store(false, std::memory_order_relaxed);
     }
 
     template <typename F>
@@ -117,12 +139,18 @@ private:
         ready_.TraverseElements(process);
         used_.TraverseElements(process);
         unswept_.TraverseElements(process);
+        parked_.TraverseElements(process);
     }
+
+    // Kore: see GetPage.
+    static constexpr float kMaxLiveFractionForYoungAllocation = 0.5f;
 
     AtomicStack<T> empty_;
     AtomicStack<T> ready_;
     AtomicStack<T> used_;
     AtomicStack<T> unswept_;
+    AtomicStack<T> parked_; // Kore: mostly-old pages withheld from young allocation until the next full collection.
+    std::atomic<bool> generational_ = false; // Kore: set once a young-generation collection has run.
 };
 
 template <typename SweepTraits>
@@ -133,6 +161,14 @@ public:
     void PrepareForGC() noexcept {
         unswept_.TransferAllFrom(std::move(newlyAllocated_));
         // used_ is not accessed by mutators and will be processed directly in Sweep
+        sweepUsed_ = true;
+    }
+
+    // Kore: young-generation collection. Objects in `used_` survived a previous collection (old objects under a
+    // sticky-mark generational GC), so only pages allocated since then are swept.
+    void PrepareForYoungGC() noexcept {
+        unswept_.TransferAllFrom(std::move(newlyAllocated_));
+        sweepUsed_ = false;
     }
 
     void Sweep(GCSweepScope& sweepHandle, FinalizerQueue& finalizerQueue) noexcept {
@@ -142,12 +178,15 @@ public:
                 survived_.PushNonAtomic(page);
             }
         }
-        while (auto* page = used_.PopNonAtomic()) {
-            if (page->SweepAndDestroy<SweepTraits>(sweepHandle, finalizerQueue)) {
-                survived_.PushNonAtomic(page);
+        if (sweepUsed_) {
+            while (auto* page = used_.PopNonAtomic()) {
+                if (page->SweepAndDestroy<SweepTraits>(sweepHandle, finalizerQueue)) {
+                    survived_.PushNonAtomic(page);
+                }
             }
         }
         used_.TransferAllFrom(std::move(survived_));
+        sweepUsed_ = true;
     }
 
     SingleObjectPage* NewPage(uint64_t cellCount) noexcept {
@@ -192,6 +231,7 @@ private:
     AtomicStack<SingleObjectPage> newlyAllocated_;
     AtomicStack<SingleObjectPage> used_;
     AtomicStack<SingleObjectPage> unswept_;
+    bool sweepUsed_ = true; // Kore: false during a young-generation collection.
 };
 
 } // namespace kotlin::alloc

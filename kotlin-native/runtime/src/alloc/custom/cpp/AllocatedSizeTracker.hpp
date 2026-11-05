@@ -24,6 +24,9 @@ struct AllocatedSizeTracker {
         /** Returns the tracker value after the update. */
         std::size_t recordDifference(std::ptrdiff_t diffBytes) noexcept;
         void recordDifferenceAndNotifyScheduler(std::ptrdiff_t diffBytes) noexcept;
+
+        // Kore: the current tracker value, i.e. the object bytes the GC scheduler sees.
+        std::size_t allocatedBytes() const noexcept { return static_cast<std::size_t>(allocatedBytes_.load(std::memory_order_relaxed)); }
     private:
         std::atomic<std::ptrdiff_t> allocatedBytes_ = 0;
     };

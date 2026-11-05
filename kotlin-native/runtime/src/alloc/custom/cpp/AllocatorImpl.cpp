@@ -5,6 +5,8 @@
 
 #include "AllocatorImpl.hpp"
 
+#include <algorithm>
+
 #include "Allocator.hpp"
 #include "GCApi.hpp"
 #include "Heap.hpp"
@@ -47,6 +49,21 @@ alloc::Allocator::~Allocator() = default;
 
 void alloc::Allocator::prepareForGC() noexcept {
     impl_->heap().PrepareForGC();
+}
+
+size_t alloc::Allocator::objectBytes() noexcept {
+    return impl_->heap().allocatedSizeTracker().allocatedBytes();
+}
+
+void alloc::Allocator::prepareForYoungGC() noexcept {
+    impl_->heap().PrepareForYoungGC();
+}
+
+void alloc::Allocator::forEachHeapSlot(
+        std::vector<ObjHeader**>& slots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    impl_->heap().ForEachHeapSlot(slots, process);
 }
 
 void alloc::Allocator::clearForTests() noexcept {
