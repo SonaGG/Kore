@@ -1,0 +1,18 @@
+Kore
+Copyright 2026 Sona Interactive, Inc.
+
+This product is a modified version of the Kotlin/Native compiler and runtime from the Kotlin project
+(https://github.com/JetBrains/kotlin), tag v2.4.21:
+
+   Kotlin Compiler
+   Copyright 2010-2024 JetBrains s.r.o and respective authors and developers
+
+Licensed under the Apache License, Version 2.0 (see license/LICENSE.txt). The upstream NOTICE file is reproduced in
+license/NOTICE.txt, and third-party license information for bundled code is in license/README.md and
+license/third_party/.
+
+Files modified by Sona Interactive, Inc. are identified by the git history of this repository; the initial import commit
+contains the unmodified upstream sources. Modified lines are additionally marked with "Kore:" comments where practical.
+
+Kore is not affiliated with or endorsed by JetBrains or the Kotlin Foundation. "Kotlin" is a trademark of the Kotlin
+Foundation.
