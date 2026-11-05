@@ -10,6 +10,7 @@
 #include "Passes/PrepareThreadSanitizer.h"
 
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Scalar/InductiveRangeCheckElimination.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -69,6 +70,9 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
             PB.registerScalarOptimizerLateEPCallback(
                 [](FunctionPassManager &PM, OptimizationLevel) {
                   PM.addPass(LoopSafepointsPass());
+                  // Then split loops into one without array bounds checks and
+                  // (rarely run) ones with them, so that they can be vectorized.
+                  PM.addPass(IRCEPass());
                 });
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &PM,
