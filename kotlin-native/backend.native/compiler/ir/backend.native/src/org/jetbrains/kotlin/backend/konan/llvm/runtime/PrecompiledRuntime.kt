@@ -206,4 +206,4 @@ private const val CALLEE_INSTRUCTION_LIMIT = 160
 private const val CALLEE_DEPTH = 3
 
 // Change when the way the runtime object is produced changes.
-private const val CACHE_FORMAT = "kore-runtime-3"
+private const val CACHE_FORMAT = "kore-runtime-4"

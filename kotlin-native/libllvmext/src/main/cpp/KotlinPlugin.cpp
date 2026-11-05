@@ -5,6 +5,7 @@
 #include "KotlinPlugin.h"
 
 #include "Passes/HideSymbols.h"
+#include "Passes/LoopCallBonus.h"
 #include "Passes/LoopSafepoints.h"
 #include "Passes/ObjectScalarReplacement.h"
 #include "Passes/PrepareStackProtector.h"
@@ -77,6 +78,11 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // Then split loops into one without array bounds checks and
                   // (rarely run) ones with them, so that they can be vectorized.
                   PM.addPass(IRCEPass());
+                });
+            // Kore: static hotness for the inliner.
+            PB.registerPipelineEarlySimplificationEPCallback(
+                [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
+                  PM.addPass(createModuleToFunctionPassAdaptor(LoopCallBonusPass()));
                 });
             // Kore: allocations stay calls until all inlining into their
             // functions is done.

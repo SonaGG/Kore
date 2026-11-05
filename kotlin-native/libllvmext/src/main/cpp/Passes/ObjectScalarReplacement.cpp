@@ -20,6 +20,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 
 #include <map>
@@ -818,6 +820,16 @@ PreservedAnalyses ObjectScalarReplacementPass::run(Function &F,
 
 PreservedAnalyses InlinePendingAllocationsPass::run(Module &M,
                                                     ModuleAnalysisManager &) {
+  // Kore: keep the body of the function prologue safepoint until the code
+  // generator inlines it after the LTO pipeline (which would drop it otherwise,
+  // leaving a call in every function).
+  if (Function *Prologue = M.getFunction("Kotlin_mm_safePointFunctionPrologue");
+      Prologue && !Prologue->isDeclaration()) {
+    SmallVector<GlobalValue *> Used;
+    collectUsedGlobalVariables(M, Used, /*CompilerUsed=*/false);
+    if (!is_contained(Used, Prologue))
+      appendToUsed(M, {Prologue});
+  }
   Function *Allocate = M.getFunction(AllocInstanceName);
   if (!Allocate)
     return PreservedAnalyses::all();

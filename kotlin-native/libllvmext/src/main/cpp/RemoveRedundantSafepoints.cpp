@@ -9,6 +9,12 @@
 #include "llvm-c/Core.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SCCIterator.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
 
 #include <cstring>
 #include <string>
@@ -68,8 +74,42 @@ static void removeOrInlinePrologueSafepointInstructions(
   }
 }
 
+// Kore: the functions that need a prologue safepoint (like HotSpot, which polls
+// in loops and on returns, not on entry). Loops poll on their own, so a
+// function needs to poll only if it may call itself again before returning:
+// if it is in a cycle of direct calls, or makes indirect (virtual) calls. Any
+// other function reaches a poll of a callee or of a loop, or returns, after a
+// bounded number of steps, which bounds the time to reach a safepoint.
+static DenseSet<const Function *> functionsNeedingPrologueSafepoints(Module &M) {
+  DenseSet<const Function *> Result;
+  CallGraph CG(M);
+  for (auto It = scc_begin(&CG); !It.isAtEnd(); ++It) {
+    const std::vector<CallGraphNode *> &SCC = *It;
+    bool Cyclic = SCC.size() > 1 || It.hasCycle();
+    for (CallGraphNode *Node : SCC) {
+      const Function *F = Node->getFunction();
+      if (!F || F->isDeclaration())
+        continue;
+      bool Needs = Cyclic;
+      for (const Instruction &I : instructions(*F)) {
+        const auto *Call = dyn_cast<CallBase>(&I);
+        if (Call && !Call->getCalledFunction() && !Call->isInlineAsm()) {
+          Needs = true;
+          break;
+        }
+      }
+      if (Needs)
+        Result.insert(F);
+    }
+  }
+  return Result;
+}
+
 void LLVMKotlinRemoveRedundantSafepoints(LLVMModuleRef M,
                                          int IsSafepointInliningAllowed) {
+  DenseSet<const Function *> NeedsSafepoint;
+  if (IsSafepointInliningAllowed)
+    NeedsSafepoint = functionsNeedingPrologueSafepoints(*unwrap(M));
   for (auto F = LLVMGetFirstFunction(M); F; F = LLVMGetNextFunction(F)) {
     if (LLVMIsDeclaration(F))
       continue;
@@ -77,7 +117,8 @@ void LLVMKotlinRemoveRedundantSafepoints(LLVMModuleRef M,
     if (!FirstBB)
       continue;
     bool FirstBBHasSafepoint = containsPrologueSafepoint(FirstBB);
-    removeOrInlinePrologueSafepointInstructions(FirstBB, /*RemoveFirst=*/false,
+    bool RemoveAll = IsSafepointInliningAllowed && !NeedsSafepoint.contains(unwrap<Function>(F));
+    removeOrInlinePrologueSafepointInstructions(FirstBB, /*RemoveFirst=*/RemoveAll,
                                                 IsSafepointInliningAllowed);
     for (auto BB = LLVMGetNextBasicBlock(FirstBB); BB;
          BB = LLVMGetNextBasicBlock(BB)) {

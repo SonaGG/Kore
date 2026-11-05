@@ -222,10 +222,16 @@ LLVMModuleRef LLVMKotlinSplitRuntimeModule(LLVMModuleRef Runtime,
   }
 
   // Interposable definitions may be replaced by the program's ones.
-  auto MayInline = [](const Function &F) {
+  // The safepoint functions are `noinline` so that the compiler finds and inlines
+  // them itself, after removing redundant ones.
+  auto IsSafepoint = [](const Function &F) {
+    return F.getName() == "Kotlin_mm_safePointFunctionPrologue" ||
+           F.getName() == "Kotlin_mm_safePointWhileLoopBody";
+  };
+  auto MayInline = [&](const Function &F) {
     return !F.isDeclaration() && !F.isInterposable() &&
            !F.getName().starts_with("llvm.") &&
-           !F.hasFnAttribute(Attribute::NoInline);
+           (!F.hasFnAttribute(Attribute::NoInline) || IsSafepoint(F));
   };
   // Small functions, and the not too large functions they call (such as the
   // allocator's fast paths), which inlining into the program can flatten.
