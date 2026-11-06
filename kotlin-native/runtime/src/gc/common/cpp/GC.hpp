@@ -95,6 +95,8 @@ void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadA
 // Kore: like beforeHeapRefUpdate (non-atomic store), for a slot known to belong to `holder` (a heap, stack or permanent
 // object). Used by `UpdateHeapRefInObject`, which compiled code calls for field stores and the runtime for array stores.
 void beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept;
+// Kore: generational GC, out of line part of `beforeHeapRefUpdateInObject`.
+void rememberOldHolderIfYoungValue(ObjHeader* holder, ObjHeader* value) noexcept;
 // Kore: must be called after `value` was stored into a reference slot that belongs to `holder` but was written without
 // going through `beforeHeapRefUpdate` (e.g. linking a weak reference implementation from ExtraObjectData).
 // Generational GCs record old->young edges here; other GCs ignore it.

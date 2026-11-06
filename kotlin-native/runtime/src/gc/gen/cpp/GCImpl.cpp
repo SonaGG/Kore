@@ -701,11 +701,19 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::D
     // their fields need no barrier (the scan sees them at every collection, so they are in the marking snapshot and are
     // roots of young collections). A plain load of the tag, so that the check folds away for stack objects of the
     // compiled code (the tag of heap objects never changes).
-    if (compiler::conservativeStacks() &&
-        (reinterpret_cast<uintptr_t>(*reinterpret_cast<TypeInfo* const*>(holder)) & OBJECT_TAG_MASK) == OBJECT_TAG_STACK) {
-        return;
-    }
+    auto tag = reinterpret_cast<uintptr_t>(*reinterpret_cast<TypeInfo* const*>(holder)) & OBJECT_TAG_MASK;
+    if (compiler::conservativeStacks() && tag == OBJECT_TAG_STACK) return;
     barriers::beforeHeapRefUpdate(ref, value, false);
+    // Kore: only the common case (a young heap holder) is inlined into compiled code; old holders go out of line, which
+    // keeps the code of every reference store small (and the functions doing them inlinable).
+    if (__builtin_expect(tag != OBJECT_TAG_HEAP, false)) return; // Stack objects are roots; permanent objects are immutable.
+    auto& holderData = alloc::objectDataForObject(holder);
+    if (__builtin_expect(!holderData.oldOrSurviving(), true)) return;
+    if (holderData.remembered()) return; // Already logged until the next young collection.
+    rememberOldHolderIfYoungValue(holder, value);
+}
+
+NO_INLINE void gc::rememberOldHolderIfYoungValue(ObjHeader* holder, ObjHeader* value) noexcept {
     rememberIfOldToYoung(holder, value);
 }
 
