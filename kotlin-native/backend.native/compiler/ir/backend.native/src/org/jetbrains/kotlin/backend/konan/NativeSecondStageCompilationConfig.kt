@@ -245,9 +245,9 @@ class NativeSecondStageCompilationConfig(
 
     // Kore: the moving young generation, in MiB (0: none). Only with the generational GC.
     val gcNurserySize: UInt
-        get() = if (gc == GC.GENERATIONAL_MARK_AND_SWEEP && !immix) configuration.get(BinaryOptions.gcNurserySize) ?: 0u else 0u
+        get() = if (gc == GC.GENERATIONAL_MARK_AND_SWEEP) configuration.get(BinaryOptions.gcNurserySize) ?: 0u else 0u
 
-    // Kore: Immix blocks for small and medium objects (memory v2). The nursery is not used with them.
+    // Kore: Immix blocks for small and medium objects (memory v2), also where a nursery evacuates survivors to.
     val immix: Boolean
         get() = configuration.get(BinaryOptions.immix) ?: (gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM)
 

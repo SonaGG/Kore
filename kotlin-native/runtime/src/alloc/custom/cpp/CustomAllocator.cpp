@@ -5,6 +5,8 @@
 
 #include "CustomAllocator.hpp"
 
+#include <cstdlib>
+
 #include <cstdint>
 #include <cinttypes>
 #include <cstring>
@@ -18,8 +20,19 @@
 #include "FixedBlockPage.hpp"
 #include "GCApi.hpp"
 #include "SafePoint.hpp"
+#include "ThreadRegistry.hpp"
 
 namespace kotlin::alloc {
+
+namespace {
+
+// Kore: allocation polls (see `Allocate`) only on threads attached to the runtime (the allocator is also used without
+// one, e.g. by its tests).
+ALWAYS_INLINE void pollIfAttached() noexcept {
+    if (mm::ThreadRegistry::IsCurrentThreadRegistered()) mm::safePoint();
+}
+
+} // namespace
 
 CustomAllocator::CustomAllocator(Heap& heap) noexcept : heap_(heap), nextFitPage_(nullptr), extraObjectPage_(nullptr) {
     CustomAllocInfo("CustomAllocator::CustomAllocator(heap)");
@@ -35,14 +48,10 @@ ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
     auto descriptor = CustomHeapObject::descriptorFrom(typeInfo);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
     bool hasFinalizer = typeInfo->flags_ & TF_HAS_FINALIZER;
-    uint8_t* memory;
-    if (compiler::immix()) {
-        memory = AllocateInImmix(size, /* poll = */ true);
-    } else {
-        // Kore: objects with finalizers never move (their extra object data points back to them).
-        memory = hasFinalizer ? nullptr : TryAllocateInNursery(size);
-        if (memory == nullptr) memory = Allocate(size);
-    }
+    // Kore: young objects go to the nursery if there is one (survivors are then copied to Immix blocks or pages).
+    // Objects with finalizers never move (their extra object data points back to them).
+    uint8_t* memory = compiler::gcNurserySize() > 0 && !hasFinalizer ? TryAllocateInNursery(size) : nullptr;
+    if (memory == nullptr) memory = compiler::immix() ? AllocateInImmix(size, /* poll = */ true) : Allocate(size);
     auto& heapObject = *descriptor.construct(memory);
     ObjHeader* object = heapObject.object();
     if (hasFinalizer) {
@@ -61,13 +70,8 @@ ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t cou
     RuntimeAssert(typeInfo->IsArray(), "Must be an array");
     auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
-    uint8_t* memory;
-    if (compiler::immix()) {
-        memory = AllocateInImmix(size, /* poll = */ true);
-    } else {
-        memory = TryAllocateInNursery(size);
-        if (memory == nullptr) memory = Allocate(size);
-    }
+    uint8_t* memory = compiler::gcNurserySize() > 0 ? TryAllocateInNursery(size) : nullptr;
+    if (memory == nullptr) memory = compiler::immix() ? AllocateInImmix(size, /* poll = */ true) : Allocate(size);
     auto& heapArray = *descriptor.construct(memory);
     ArrayHeader* array = heapArray.array();
     array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
@@ -99,7 +103,7 @@ uint8_t* CustomAllocator::RefillNursery(size_t bytes) noexcept {
     heap_.allocatedSizeTracker().recordDifferenceAndNotifyScheduler(static_cast<std::ptrdiff_t>(Nursery::kBlockSize));
     // Kore: and poll, so that a thread that allocates (and may have requested the collection by doing so) stops soon
     // even in code without other polls. Allocations are GC points for the compiled code.
-    mm::safePoint();
+    pollIfAttached();
     uint8_t* start;
     uint8_t* end;
     if (!Nursery::instance()->takeBlock(start, end)) {
@@ -193,7 +197,7 @@ uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size, bool poll
             // Kore: see `Allocate`: a mutator polls before taking a new block (the loop then rereads the fields, which a
             // collection resets).
             if (poll) {
-                mm::safePoint();
+                pollIfAttached();
                 if (bytes <= static_cast<size_t>(immixLimit_ - immixCursor_)) continue;
             }
             immixBlock_ = heap_.immixBlocks().TakeBlock();
@@ -215,7 +219,7 @@ uint8_t* CustomAllocator::AllocateInImmixOverflow(size_t bytes, bool poll) noexc
         }
         // The rest of the previous overflow block (less than a medium object) is left to the next sweep.
         if (poll) {
-            mm::safePoint();
+            pollIfAttached();
             if (bytes <= static_cast<size_t>(overflowLimit_ - overflowCursor_)) continue;
         }
         ImmixBlock* block = heap_.immixBlocks().TakeFreeBlock();
@@ -226,7 +230,7 @@ uint8_t* CustomAllocator::AllocateInImmixOverflow(size_t bytes, bool poll) noexc
 uint8_t* CustomAllocator::AllocateInSingleObjectPage(uint64_t cellCount, bool poll) noexcept {
     CustomAllocDebug("CustomAllocator::AllocateInSingleObjectPage(%" PRIu64 ")", cellCount);
     // Kore: see `Allocate`. Large objects are rare, and slow to allocate anyway.
-    if (poll) mm::safePoint();
+    if (poll) pollIfAttached();
     uint8_t* block = heap_.GetSingleObjectPage(cellCount)->Allocate();
     return block;
 }
@@ -238,7 +242,7 @@ uint8_t* CustomAllocator::AllocateInNextFitPage(uint32_t cellCount, bool poll) n
         if (block) return block;
     }
     CustomAllocDebug("Failed to allocate in curPage");
-    if (poll) mm::safePoint(); // Kore: see `Allocate`.
+    if (poll) pollIfAttached(); // Kore: see `Allocate`.
     while (true) {
         nextFitPage_ = heap_.GetNextFitPage(cellCount, finalizerQueue_);
         uint8_t* block = nextFitPage_->TryAllocate(cellCount);
@@ -254,7 +258,7 @@ uint8_t* CustomAllocator::AllocateInFixedBlockPage(uint32_t cellCount, bool poll
         if (block) return block;
     }
     CustomAllocDebug("Failed to allocate in current FixedBlockPage");
-    if (poll) mm::safePoint(); // Kore: see `Allocate`.
+    if (poll) pollIfAttached(); // Kore: see `Allocate`.
     while ((page = heap_.GetFixedBlockPage(cellCount, finalizerQueue_))) {
         uint8_t* block = page->TryAllocate();
         if (block) {

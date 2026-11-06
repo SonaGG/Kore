@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -21,6 +22,14 @@
 #include "concurrent/Once.hpp"
 #include "concurrent/ScopedThread.hpp"
 
+
+namespace kotlin::gc::internal {
+// Kore: during a young collection with a nursery, the order in which the mark reaches nursery objects (see
+// `GenerationalGC::evacuateNursery`, which copies survivors in that order, so that objects used together end up
+// together).
+extern std::atomic<bool> gRecordNurseryOrder;
+void recordNurseryOrder(ObjHeader* object) noexcept;
+} // namespace kotlin::gc::internal
 
 namespace kotlin::gc::mark {
 
@@ -96,10 +105,17 @@ public:
                 // concurrently).
                 auto* typeInfo = clearPointerBits(object->typeInfoOrMetaRelaxed(), OBJECT_TAG_MASK);
                 if (typeInfo->typeInfo_ == typeInfo && typeInfo->processObjectInMark == Kotlin_processEmptyObjectInMark) {
-                    return objectData.tryMark();
+                    bool marked = objectData.tryMark();
+                    if (marked && __builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
+                        internal::recordNurseryOrder(object);
+                    }
+                    return marked;
                 }
             }
             bool pushed = queue.tryPush(objectData);
+            if (pushed && __builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
+                internal::recordNurseryOrder(object);
+            }
             if (pushed) {
                 RuntimeLogDebug({logging::Tag::kGCMark}, "Enqueued %p", object);
             }

@@ -193,6 +193,10 @@ ALWAYS_INLINE bool recordingNurserySlots() noexcept {
     return gRecordNurserySlots.load(std::memory_order_relaxed);
 }
 
+// The nursery objects marked by the young collection in progress, in the order they were reached (per mark thread).
+[[clang::no_destroy]] std::vector<std::vector<ObjHeader*>*> gNurseryOrderLists;
+thread_local std::vector<ObjHeader*>* tNurseryOrder = nullptr;
+
 // Kore: during a young collection's (parallel) mark, big arrays are marked in slices, which the other mark workers take
 // (see `MarkTraits::tryDequeue`): one worker scanning a big array alone (e.g. the elements of a big ArrayList) would
 // make the pause as long as that scan.
@@ -491,12 +495,9 @@ void gc::internal::GenerationalGC::evacuateNursery() noexcept {
         ptrdiff_t offset;
     };
     std::vector<Move> moves;
-    alloc::nursery::forEachMovableObject([&](ObjHeader* object) noexcept {
+    auto evacuate = [&](ObjHeader* object) noexcept {
         auto& data = alloc::objectDataForObject(object);
-        static const bool verifyPins = std::getenv("KORE_GC_VERIFY") != nullptr;
-        if (verifyPins && !data.marked() && alloc::nursery::pinned(object)) {
-            konan::consoleErrorf("kore-gc-verify: pinned nursery object %p (type %p) is not marked\n", object, object->type_info());
-        }
+        if (data.forwarded()) return; // Already done (in mark order).
         if (!data.marked()) return; // Dead.
         // Objects with extra object data (weak references, associated objects) are referred to from it: they stay.
         if (alloc::nursery::pinned(object) || object->has_meta_object()) {
@@ -508,7 +509,22 @@ void gc::internal::GenerationalGC::evacuateNursery() noexcept {
         auto* to = reinterpret_cast<ObjHeader*>(allocator_.allocateForEvacuation(bytes) + offset);
         moves.push_back({object, to, bytes, offset});
         data.forwardTo(to);
-    });
+    };
+    // Kore: survivors are copied in the order the mark reached them (roughly breadth first from the roots): objects
+    // used together (a list, its elements, their fields) end up next to each other, as with a copying collector. The
+    // others (marked by other paths) follow in address order.
+    {
+        std::vector<std::vector<ObjHeader*>*> orderLists;
+        {
+            std::unique_lock guard(gNurserySlotListsMutex);
+            orderLists = gNurseryOrderLists;
+        }
+        for (auto* order : orderLists) {
+            for (ObjHeader* object : *order) evacuate(object);
+            order->clear();
+        }
+    }
+    alloc::nursery::forEachMovableObject(evacuate);
     // Update the slots that refer to moved objects (in place: slots inside moved objects are copied afterwards).
     std::vector<std::vector<ObjHeader**>*> slotLists;
     {
@@ -680,6 +696,7 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
         }
         pinNurseryRoots(stackReferenced);
         gRecordNurserySlots.store(true, std::memory_order_relaxed);
+        gc::internal::gRecordNurseryOrder.store(true, std::memory_order_relaxed);
     }
 
     RememberedSet rememberedSet;
@@ -701,6 +718,7 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
 
     if (nursery) {
         gRecordNurserySlots.store(false, std::memory_order_relaxed);
+        gc::internal::gRecordNurseryOrder.store(false, std::memory_order_relaxed);
         evacuateNursery();
     }
     uint64_t evacuationEnd = konan::getTimeMicros();
@@ -1051,4 +1069,16 @@ void gc::mark::ConcurrentMark::MarkTraits::checkEnqueue(ObjHeader* object) noexc
                              internal::isYoungCollection());
         std::abort();
     }
+}
+
+std::atomic<bool> kotlin::gc::internal::gRecordNurseryOrder = false;
+
+void kotlin::gc::internal::recordNurseryOrder(ObjHeader* object) noexcept {
+    if (!alloc::nursery::movable(object)) return;
+    if (tNurseryOrder == nullptr) {
+        tNurseryOrder = new std::vector<ObjHeader*>();
+        std::unique_lock guard(gNurserySlotListsMutex);
+        gNurseryOrderLists.push_back(tNurseryOrder);
+    }
+    tNurseryOrder->push_back(object);
 }
