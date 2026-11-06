@@ -111,7 +111,7 @@ public actual constructor(initialCapacity: Int) : MutableList<E>, RandomAccess, 
     actual override fun indexOf(element: E): Int {
         var i = 0
         while (i < length) {
-            if (backing[i] == element) return i
+            if (element == backing[i]) return i
             i++
         }
         return -1
@@ -120,7 +120,7 @@ public actual constructor(initialCapacity: Int) : MutableList<E>, RandomAccess, 
     actual override fun lastIndexOf(element: E): Int {
         var i = length - 1
         while (i >= 0) {
-            if (backing[i] == element) return i
+            if (element == backing[i]) return i
             i--
         }
         return -1
@@ -455,7 +455,7 @@ public actual constructor(initialCapacity: Int) : MutableList<E>, RandomAccess, 
             checkForComodification()
             var i = 0
             while (i < length) {
-                if (backing[offset + i] == element) return i
+                if (element == backing[offset + i]) return i
                 i++
             }
             return -1
@@ -465,7 +465,7 @@ public actual constructor(initialCapacity: Int) : MutableList<E>, RandomAccess, 
             checkForComodification()
             var i = length - 1
             while (i >= 0) {
-                if (backing[offset + i] == element) return i
+                if (element == backing[offset + i]) return i
                 i--
             }
             return -1
