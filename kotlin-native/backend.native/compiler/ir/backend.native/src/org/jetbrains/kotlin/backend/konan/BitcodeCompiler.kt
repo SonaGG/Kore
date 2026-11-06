@@ -131,6 +131,9 @@ internal class BitcodeCompiler(
     private fun codegenPartitions(configurables: ClangFlags, bitcodeFile: File): Int {
         val requested = config.codegenPartitions.toInt()
         if (requested == 1 || !optimize) return 1
+        // Splitting would externalize the instrumentation's counters and profile data, which belong to COMDAT groups.
+        // Instrumented binaries are only for training, so their compile time matters less.
+        if (config.pgoGenerate) return 1
         // Externalized locals would be exported from a DLL by MinGW's automatic export, and caches and libraries are
         // linked into other binaries, so only split executables.
         if (config.produce != CompilerOutputKind.PROGRAM) return 1

@@ -268,6 +268,15 @@ class NativeSecondStageCompilationConfig(
     val precompileRuntime: Boolean
         get() = configuration.get(BinaryOptions.precompileRuntime) ?: true
 
+    // Kore: profile-guided optimization, only of optimized final binaries. See [BinaryOptions.pgoGenerate].
+    val pgoGenerate: Boolean
+        get() = configuration.get(BinaryOptions.pgoGenerate) == true && optimizationsEnabled && isFinalBinary
+
+    // Kore: the indexed profile to optimize with, see [BinaryOptions.pgoUse].
+    val pgoUse: java.io.File?
+        get() = configuration.get(BinaryOptions.pgoUse)?.takeIf { it.isNotEmpty() && optimizationsEnabled && isFinalBinary }
+                ?.let { java.io.File(it).absoluteFile }
+
     val concurrentWeakSweep: Boolean
         get() = configuration.get(BinaryOptions.concurrentWeakSweep) ?: true
 

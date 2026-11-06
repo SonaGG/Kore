@@ -78,6 +78,14 @@ object BinaryOptions : BinaryOptionRegistry() {
     // compiling machine's CPU. Unset: the target's baseline CPU.
     val cpu by stringOption()
 
+    // Kore: instrument an optimized binary for profile-guided optimization; running it writes a raw LLVM profile
+    // (`default_%m.profraw` in the working directory, or as set by the LLVM_PROFILE_FILE environment variable).
+    val pgoGenerate by booleanOption()
+
+    // Kore: optimize the binary using an indexed LLVM profile (`llvm-profdata merge` of raw profiles written by a
+    // `pgoGenerate` build of the same program).
+    val pgoUse by stringOption()
+
     val concurrentWeakSweep by booleanOption()
 
     val concurrentMarkMaxIterations by uintOption()

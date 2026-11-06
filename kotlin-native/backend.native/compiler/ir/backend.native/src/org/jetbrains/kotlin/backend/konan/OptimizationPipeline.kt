@@ -53,6 +53,10 @@ data class LlvmPipelineConfig(
         val saveIrAfterPasses: List<String> = emptyList(),
         val saveIrDirectory: java.io.File? = null,
         val runLLVMPassesInCompiler: Boolean,
+        /** Kore: instrument the module for PGO, writing the raw profile to this file pattern. */
+        val pgoInstrumentFile: String? = null,
+        /** Kore: optimize the module using this indexed PGO profile. */
+        val pgoUseFile: String? = null,
 ) {
     /**
      * Create a copy of [LlvmPipelineConfig] setting up options to dump IR
@@ -215,8 +219,28 @@ internal fun createLTOFinalPipelineConfig(
             ltoPasses = config.llvmLTOPasses,
             sspMode = config.stackProtectorMode,
             runLLVMPassesInCompiler = config.runLLVMPassesInCompiler,
+            pgoInstrumentFile = if (config.pgoGenerate) PGO_DEFAULT_PROFILE_FILE else null,
+            pgoUseFile = pgoUseFile(context),
     )
 }
+
+private fun pgoUseFile(context: NativeBackendPhaseContext): String? {
+    val profile = context.config.pgoUse ?: return null
+    if (context.config.pgoGenerate) {
+        context.reportCompilationError("Binary options pgoGenerate and pgoUse cannot be used together")
+    }
+    if (!profile.isFile) {
+        context.reportCompilationError("PGO profile ${profile.path} (binary option pgoUse) does not exist. " +
+                "Merge the raw profiles of an instrumented (pgoGenerate) build with `llvm-profdata merge -o <file> <raw profiles>`.")
+    }
+    return profile.path
+}
+
+/**
+ * Kore: where an instrumented binary writes its raw profile unless the `LLVM_PROFILE_FILE` environment variable says
+ * otherwise (the default of clang's `-fprofile-generate`): `%m` makes runs of the same binary merge into one file.
+ */
+internal const val PGO_DEFAULT_PROFILE_FILE = "default_%m.profraw"
 
 abstract class LlvmOptimizationPipeline(
         private val config: LlvmPipelineConfig,
@@ -227,6 +251,9 @@ abstract class LlvmOptimizationPipeline(
 
     abstract val pipelineName: String
     abstract val passes: List<String>
+
+    /** Kore: whether [LlvmPipelineConfig.pgoInstrumentFile] and [LlvmPipelineConfig.pgoUseFile] apply to this pipeline. */
+    protected open val appliesPgo: Boolean get() = false
     val optimizationFlag = when (config.sizeLevel) {
         LlvmSizeLevel.NONE -> "O${config.optimizationLevel.value}"
         LlvmSizeLevel.DEFAULT -> "Os"
@@ -279,6 +306,8 @@ abstract class LlvmOptimizationPipeline(
                     Profile = it,
                     SaveIRAfterPasses = config.saveIrAfterPasses.joinToString(",").takeIf { it.isNotEmpty() },
                     SaveIRDirectory = config.saveIrDirectory?.absolutePath,
+                    PGOInstrumentFile = config.pgoInstrumentFile?.takeIf { appliesPgo },
+                    PGOUseFile = config.pgoUseFile?.takeIf { appliesPgo },
             )
         }
         require(errorCode == null) {
@@ -364,6 +393,10 @@ class ModuleOptimizationPipeline(
         }
         add(if (preLink) "lto-pre-link<$optimizationFlag>" else "default<$optimizationFlag>")
     }
+
+    // Kore: the module simplification pipeline instruments the module or annotates it with the profile. The profile
+    // metadata it attaches (branch weights, function entry counts, the profile summary) then guides the LTO pipeline.
+    override val appliesPgo: Boolean get() = true
 }
 
 class LTOOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
@@ -372,7 +405,10 @@ class LTOOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: Pe
     override val passes =
             if (config.ltoPasses != null) listOf(config.ltoPasses)
             else buildList {
-                if (config.internalize) {
+                // Kore: an instrumented module is already internalized (before instrumentation, by the module pipeline),
+                // and internalizing it again would hide the definitions of the profile runtime's interface variables
+                // (e.g. `__llvm_profile_raw_version`, `__llvm_profile_filename`) from the profile runtime.
+                if (config.internalize && config.pgoInstrumentFile == null) {
                     add("internalize")
                 }
 

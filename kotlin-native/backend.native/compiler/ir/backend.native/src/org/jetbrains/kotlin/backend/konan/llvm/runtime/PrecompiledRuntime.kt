@@ -103,6 +103,9 @@ private fun shouldPrecompileRuntime(generationState: NativeGenerationState): Boo
             && config.runtimeLinkageStrategy == RuntimeLinkageStrategy.Raw
             && !config.checkStateAtExternalCalls
             && config.sanitizer == null
+            // With PGO, the runtime is optimized with the program, so that the profile covers its hot paths (e.g. allocation):
+            // the bodies of the precompiled runtime kept for inlining get no profile, and profiled code then inlines them less.
+            && !config.pgoGenerate && config.pgoUse == null
             // The runtime object is passed to the linker by the same compiler invocation that links the runtime.
             && config.writeSerializedDependencies.isNullOrEmpty()
 }
