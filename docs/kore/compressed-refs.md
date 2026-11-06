@@ -1,7 +1,7 @@
 # Kore: compressed 32-bit references and 4-byte object headers
 
-Status: compressed references implemented behind `-Xbinary=compressedRefs=true` (gc=gen with Immix, no nursery, 64-bit
-MinGW and Linux); 4-byte headers not yet. See "Implementation" below; the design that follows is the original plan, and
+Status: compressed references implemented (`-Xbinary=compressedRefs`, gc=gen with Immix, no nursery, 64-bit MinGW and
+Linux), on by default for optimized MinGW executables, zero-based there; 4-byte headers not yet. See "Implementation" below; the design that follows is the original plan, and
 the implementation differs where noted. It changes the in-memory object layout, but not the klib format or the Kotlin
 ABI.
 
@@ -28,6 +28,11 @@ ABI.
   word as 32-bit references, and words below 32 GiB as offsets. With the heap 4 GiB or more above the base, 32-bit
   integers in either form never point into the heap.
 - **Caches.** Compiler caches (of full-pointer code) are not used with compressed references.
+- **Zero-based mode** (`-Xbinary=compressedRefsZeroBased`, MinGW executables, the default there): the executable is
+  linked at a fixed address below 4 GiB (no ASLR for it), the heap reserved below 4 GiB too (both free ranges around the
+  shared user data page at 2 GiB, about 4 GiB), and a reference is the low 32 bits of the address: decoding is a zero
+  extension, with no null check. CPU-bound code runs as fast as with full pointers (pointer chasing and virtual calls
+  8-10% faster), and objects are smaller. Heaps beyond 4 GiB need `-Xbinary=compressedRefsZeroBased=false`.
 - **Results** (mingw_x64): the Compose huge-tree cold run peaks at 96-107 MiB (101 MiB upstream, 130-156 MiB without
   compressed references), with the first composition in 125 ms (221 ms without, 419 ms upstream). Objects with three
   references take 20 bytes instead of 32. CPU-bound microbenchmarks range from 8% faster (pointer chasing) to 20% slower

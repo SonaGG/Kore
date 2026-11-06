@@ -69,12 +69,14 @@ object BinaryOptions : BinaryOptionRegistry() {
     // (gen GC, custom allocator with Immix, no nursery: the default there; ignored otherwise).
     val gcWord by booleanOption()
 
-    // Kore: 32-bit references in objects and `Array` elements (docs/kore/gc-redesign.md, phase 3). Supported with gc=gen,
-    // the custom allocator with Immix and no nursery, on 64-bit MinGW and Linux; ignored otherwise.
+    // Kore: 32-bit references in objects and `Array` elements (docs/kore/compressed-refs.md). Supported with gc=gen, the
+    // custom allocator with Immix and no nursery, on 64-bit MinGW and Linux; ignored otherwise. Default: on for MinGW
+    // executables.
     val compressedRefs by booleanOption()
 
-    // Kore: compressed references that are the low 32 bits of the address (no base, no shift): the heap lies below 4 GiB, and
-    // the executable is linked at a fixed low address (no ASLR for it). MinGW executables only.
+    // Kore: compressed references that are the low 32 bits of the address (no base, no shift): the heap lies below 4 GiB
+    // (about 4 GiB at most), and the executable is linked at a fixed low address (no ASLR for it). MinGW executables only;
+    // the default there, with `compressedRefs`.
     val compressedRefsZeroBased by booleanOption()
 
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.

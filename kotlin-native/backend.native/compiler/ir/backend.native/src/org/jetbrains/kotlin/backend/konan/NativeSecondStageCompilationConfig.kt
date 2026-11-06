@@ -261,12 +261,17 @@ class NativeSecondStageCompilationConfig(
         get() = (configuration.get(BinaryOptions.gcWord) ?: false) || !gcWordSupportedOff
 
     // Kore: 32-bit references in objects and `Array` elements (docs/kore/gc-redesign.md, phase 3).
+    // On by default for optimized MinGW executables, where they are zero-based (as fast as full pointers, and objects are
+    // smaller). Not for debug builds, which use the compiler caches (built with full pointers).
     val compressedRefs: Boolean
-        get() = (configuration.get(BinaryOptions.compressedRefs) ?: false) && compressedRefsSupported
+        get() = (configuration.get(BinaryOptions.compressedRefs) ?: compressedRefsByDefault) && compressedRefsSupported
+
+    private val compressedRefsByDefault: Boolean
+        get() = target.family == Family.MINGW && produce == CompilerOutputKind.PROGRAM && optimizationsEnabled
 
     // Kore: compressed references that are plain 32-bit addresses (decoding is a zero extension), see `BinaryOptions`.
     val compressedRefsZeroBased: Boolean
-        get() = compressedRefs && (configuration.get(BinaryOptions.compressedRefsZeroBased) ?: false) &&
+        get() = compressedRefs && (configuration.get(BinaryOptions.compressedRefsZeroBased) ?: true) &&
                 target.family == Family.MINGW && produce == CompilerOutputKind.PROGRAM
 
     private val compressedRefsSupported: Boolean
