@@ -11,6 +11,7 @@
 #include "Passes/ObjectScalarReplacement.h"
 #include "Passes/PrepareStackProtector.h"
 #include "Passes/PrepareThreadSanitizer.h"
+#include "Passes/UncheckedFunctions.h"
 
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Scalar/InductiveRangeCheckElimination.h"
@@ -133,6 +134,9 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // still calls.
                   if (!passDisabled("osr"))
                     PM.addPass(ObjectScalarReplacementPass());
+                  // Drop the checks of `@Unchecked` functions (before IRCE,
+                  // which then has fewer checks to split loops for).
+                  PM.addPass(UncheckedFunctionsPass());
                   PM.addPass(LoopSafepointsPass());
                   // Then place GC frames, now that safepoints are decided.
                   if (ShrinkWrapFrames)

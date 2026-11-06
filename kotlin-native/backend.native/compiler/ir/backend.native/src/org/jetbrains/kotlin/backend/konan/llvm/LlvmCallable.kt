@@ -54,6 +54,13 @@ class LlvmCallable(val functionType: LLVMTypeRef, val returnsObjectType: Boolean
 
     fun blockAddress(label: LLVMBasicBlockRef) = LLVMBlockAddress(llvmValue, label)!!
 
+    /** Kore: marks the function for LLVM passes of the Kotlin plugin (e.g. `kore-unchecked`). */
+    fun addStringAttribute(key: String, value: String = "") {
+        val context = LLVMGetTypeContext(LLVMTypeOf(llvmValue))
+        LLVMAddAttributeAtIndex(llvmValue, LLVMAttributeFunctionIndex,
+                LLVMCreateStringAttribute(context, key, key.length, value, value.length))
+    }
+
     fun addDebugInfoSubprogram(subprogram: DISubprogramRef) {
         DIFunctionAddSubprogram(llvmValue, subprogram)
     }

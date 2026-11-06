@@ -767,6 +767,10 @@ internal class CodeGeneratorVisitor(
             llvm.usedFunctions.add(codegen.llvmFunction(declaration))
         }
 
+        // Kore: see `UncheckedFunctionsPass` (the loop polls are left out by [loopSafePoint]).
+        if (declaration.isKoreUnchecked)
+            codegen.llvmFunction(declaration).addStringAttribute("kore-unchecked")
+
         if (context.shouldVerifyBitCode())
             verifyModule(llvm.module, "${ir2string(declaration.parent)}::${ir2string(declaration)}")
     }
@@ -1202,6 +1206,8 @@ internal class CodeGeneratorVisitor(
     // Kore: the kotlin-loop-safepoints LLVM pass removes the poll from short innermost loops, strip-mines long call-free
     // ones and inlines the others, so keep it a call until then.
     private fun loopSafePoint() {
+        // Kore: `@kore.annotations.Unchecked` functions do not poll in loops.
+        if (context.shouldOptimize() && (currentCodeContext.functionScope() as? FunctionScope)?.declaration?.isKoreUnchecked == true) return
         val poll = call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
         LLVMAddCallSiteAttribute(poll, LLVMAttributeFunctionIndex,
                 createLlvmEnumAttribute(LLVMGetTypeContext(LLVMTypeOf(poll))!!, LlvmFunctionAttribute.NoInline.asAttributeKindId()))
@@ -2944,3 +2950,9 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleR
 
     return llvmModule
 }
+
+// Kore: functions annotated with `@kore.annotations.Unchecked` (see `UncheckedFunctionsPass` in the Kotlin LLVM plugin).
+private val koreUncheckedFqName = org.jetbrains.kotlin.name.FqName("kore.annotations.Unchecked")
+
+internal val IrFunction.isKoreUnchecked: Boolean
+    get() = hasAnnotation(koreUncheckedFqName)
