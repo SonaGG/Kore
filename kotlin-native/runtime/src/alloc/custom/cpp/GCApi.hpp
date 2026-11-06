@@ -59,6 +59,10 @@ struct UnzeroedRange {
 };
 extern thread_local UnzeroedRange tlsSingleObjectPageUnzeroed;
 
+// Kore: zeroed memory at an `alignment` (a power of two) from the heap reservation (`HeapReservation`), or null if there is
+// none. Freed with `Free`.
+void* SafeAllocAligned(uint64_t size, size_t alignment) noexcept;
+
 void Free(void* ptr, size_t size) noexcept;
 
 size_t GetAllocatedBytes() noexcept;

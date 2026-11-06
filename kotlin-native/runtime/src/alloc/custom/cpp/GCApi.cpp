@@ -34,6 +34,7 @@
 #include "FinalizerHooks.hpp"
 #include "GC.hpp"
 #include "GCStatistics.hpp"
+#include "HeapReservation.hpp"
 #include "KAssert.h"
 #include "Memory.h"
 
@@ -222,6 +223,13 @@ void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
 
 void* kotlin::alloc::SafeAlloc(uint64_t size, size_t unzeroedFrom, size_t unzeroedLength) noexcept {
     void* memory = nullptr;
+    if (auto* reservation = HeapReservation::instance()) {
+        memory = reservation->allocate(static_cast<size_t>(size), HeapReservation::kPageSize, unzeroedFrom, unzeroedLength);
+        if (memory != nullptr) {
+            allocatedBytesCounter.fetch_add(static_cast<size_t>(size), std::memory_order_relaxed);
+            return memory;
+        }
+    }
     if (size >= kCachedBlockMinBytes && size <= std::numeric_limits<size_t>::max()) {
         size_t block = blockSize(static_cast<size_t>(size));
         auto& cache = blockCache();
@@ -260,6 +268,10 @@ void* kotlin::alloc::SafeAlloc(uint64_t size, size_t unzeroedFrom, size_t unzero
 void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
     CustomAllocDebug("Free(%p, %zu)", ptr, size);
     allocatedBytesCounter.fetch_sub(size, std::memory_order_relaxed);
+    if (auto* reservation = HeapReservation::instance(); reservation != nullptr && reservation->contains(ptr)) {
+        reservation->free(ptr, size);
+        return;
+    }
     auto& cache = blockCache();
     size_t block;
     {
@@ -279,6 +291,14 @@ void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
         }
     }
     systemFree(ptr, block);
+}
+
+void* kotlin::alloc::SafeAllocAligned(uint64_t size, size_t alignment) noexcept {
+    auto* reservation = HeapReservation::instance();
+    if (reservation == nullptr) return nullptr;
+    void* memory = reservation->allocate(static_cast<size_t>(size), alignment, 0, 0);
+    if (memory != nullptr) allocatedBytesCounter.fetch_add(static_cast<size_t>(size), std::memory_order_relaxed);
+    return memory;
 }
 
 size_t kotlin::alloc::GetAllocatedBytes() noexcept {

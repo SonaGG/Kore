@@ -58,7 +58,7 @@ public:
             diff += static_cast<std::ptrdiff_t>(liveBytes) - static_cast<std::ptrdiff_t>(block->RecordedBytes());
             block->RecordedBytes() = liveBytes;
             if (liveBytes == 0) {
-                free_.Push(block);
+                PushFree(block);
             } else if (block->FreeLines() >= kMinFreeLinesToRecycle) {
                 recyclable_.Push(block);
             } else {
@@ -79,27 +79,42 @@ public:
     // A block with no objects (for medium objects that do not fit the holes of recycled blocks).
     ImmixBlock* TakeFreeBlock() noexcept {
         ImmixBlock* block = free_.Pop();
-        if (block == nullptr) block = NewBlock();
+        if (block != nullptr) {
+            freeBlocks_.fetch_sub(1, std::memory_order_relaxed);
+        } else {
+            block = TakeDecommittedBlock();
+            if (block == nullptr) block = NewBlock();
+        }
         used_.Push(block);
         return block;
     }
 
-    // The block containing `address` if it is in one of the chunks, else null. The chunks must not change meanwhile
-    // (the world is stopped, or allocation is otherwise excluded).
+    // Kore: returning memory (docs/kore/gc-redesign.md, phase 1). With the world stopped (no thread is taking free
+    // blocks, so they can be taken out of the list safely): sets aside the free blocks beyond a reserve.
+    void SelectBlocksToRelease() noexcept;
+    // On the GC thread, with the mutators running: returns the blocks set aside to the system. They are committed
+    // again when taken.
+    void ReleaseBlocks() noexcept;
+
+    // The block containing `address` if it is in one of the chunks and its memory is in use, else null. The chunks
+    // must not change meanwhile (the world is stopped, or allocation is otherwise excluded).
     ImmixBlock* BlockContaining(const void* address) noexcept;
 
-    // Calls `process(begin, end)` for the memory ranges of all chunks, in ascending order.
+    // Calls `process(begin, end, decommitted)` for the memory ranges of all chunks, in ascending order. `decommitted` has
+    // one bit per block whose memory is returned to the system (inaccessible).
     template <typename F>
     void TraverseChunks(F process) {
         std::unique_lock guard(chunksMutex_);
-        for (auto& chunk : chunks_) process(chunk.blocks, chunk.blocks + kBlocksPerChunk * ImmixBlock::kBlockSize);
+        for (auto& chunk : chunks_) process(chunk.blocks, chunk.blocks + kBlocksPerChunk * ImmixBlock::kBlockSize, chunk.decommitted);
     }
 
+    // The blocks whose memory is in use.
     template <typename F>
     void TraverseBlocks(F process) {
         std::unique_lock guard(chunksMutex_);
         for (auto& chunk : chunks_) {
             for (size_t i = 0; i < kBlocksPerChunk; ++i) {
+                if ((chunk.decommitted & (uint32_t(1) << i)) != 0) continue;
                 process(reinterpret_cast<ImmixBlock*>(chunk.blocks + i * ImmixBlock::kBlockSize));
             }
         }
@@ -110,10 +125,25 @@ public:
 private:
     struct Chunk {
         void* memory;
+        size_t memoryBytes;
         uint8_t* blocks; // Aligned to `ImmixBlock::kBlockSize`.
+        uint32_t decommitted; // One bit per block, see `TraverseChunks`.
     };
+    static_assert(kBlocksPerChunk <= 32, "Chunk::decommitted has one bit per block");
 
     ImmixBlock* NewBlock() noexcept;
+    ImmixBlock* TakeDecommittedBlock() noexcept;
+    void PushFree(ImmixBlock* block) noexcept {
+        free_.Push(block);
+        freeBlocks_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // The chunk containing `address`, or null. `chunksMutex_` must be held.
+    Chunk* ChunkContaining(const void* address) noexcept;
+
+    std::atomic<size_t> freeBlocks_ = 0; // In `free_`.
+    std::vector<ImmixBlock*> toRelease_; // Set aside by `SelectBlocksToRelease`.
+    std::mutex decommittedMutex_;
+    std::vector<ImmixBlock*> decommitted_; // Returned to the system; in no list.
 
     AtomicStack<ImmixBlock> free_;
     AtomicStack<ImmixBlock> recyclable_;

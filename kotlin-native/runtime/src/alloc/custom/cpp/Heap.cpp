@@ -37,6 +37,7 @@ void Heap::PrepareForGC() noexcept {
     fixedBlockExtraObjectPages_.PrepareForGC();
     singleExtraObjectPages_.PrepareForGC();
     immixBlocks_.PrepareForGC();
+    immixBlocks_.SelectBlocksToRelease();
 }
 
 void Heap::PrepareForYoungGC() noexcept {
@@ -49,6 +50,7 @@ void Heap::PrepareForYoungGC() noexcept {
     fixedBlockExtraObjectPages_.PrepareForYoungGC();
     singleExtraObjectPages_.PrepareForYoungGC();
     immixBlocks_.PrepareForYoungGC();
+    immixBlocks_.SelectBlocksToRelease();
 }
 
 
@@ -64,8 +66,14 @@ void Heap::ForEachHeapSlot(
 
     // Kore: almost every object is in an Immix block, whose object starts give the owner of an address directly. Only
     // the other addresses need the (sorted) ranges of all the heap's pages.
-    std::vector<std::pair<const uint8_t*, const uint8_t*>> chunks;
-    immixBlocks_.TraverseChunks([&](uint8_t* begin, uint8_t* end) { chunks.emplace_back(begin, end); });
+    struct Chunk {
+        const uint8_t* first;
+        const uint8_t* second;
+        uint32_t decommitted;
+        bool operator<(const Chunk& other) const noexcept { return first < other.first; }
+    };
+    std::vector<Chunk> chunks;
+    immixBlocks_.TraverseChunks([&](uint8_t* begin, uint8_t* end, uint32_t decommitted) { chunks.push_back({begin, end, decommitted}); });
     std::sort(chunks.begin(), chunks.end());
     std::vector<ObjHeader**> sortedSlots;
     auto chunk = chunks.begin();
@@ -76,6 +84,8 @@ void Heap::ForEachHeapSlot(
             sortedSlots.push_back(slot);
             continue;
         }
+        // Kore: a block returned to the system holds no objects (and must not be read).
+        if ((chunk->decommitted & (uint32_t(1) << ((address - chunk->first) / ImmixBlock::kBlockSize))) != 0) continue;
         uint8_t* block = ImmixBlock::Of(address)->StartAtOrBefore(address);
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
@@ -158,6 +168,8 @@ FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle, const std::function<void(const
     while (concurrentSweepersCount_.load(std::memory_order_acquire) > 0) {
         std::this_thread::yield();
     }
+    // Kore: free blocks set aside when the world was stopped go back to the system (docs/kore/gc-redesign.md, phase 1).
+    immixBlocks_.ReleaseBlocks();
     CustomAllocDebug("Heap::Sweep done");
     return finalizerQueue;
 }
