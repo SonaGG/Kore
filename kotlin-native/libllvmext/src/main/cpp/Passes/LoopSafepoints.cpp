@@ -162,12 +162,16 @@ PreservedAnalyses LoopSafepointsPass::run(Function &F,
     }
     // Kore: a loop with calls polls on every iteration (calls do not poll on
     // entry, see `LLVMKotlinRemoveRedundantSafepoints`), a short call-free one
-    // does not poll, and a long call-free one polls between chunks of
-    // iterations.
-    std::optional<uint64_t> MaxCount = maxBackedgeTakenCount(*L, SE);
-    if (!MaxCount || makesCalls(*L))
+    // does not poll, and any other call-free one (long, or of unknown length,
+    // e.g. bounded by a size field that a per-iteration poll would make LLVM
+    // reload) polls between chunks of iterations: the chunk counter bounds the
+    // time between polls whatever the trip count.
+    if (makesCalls(*L)) {
       ToInline.push_back(Poll);
-    else if (*MaxCount < loopPollChunk())
+      continue;
+    }
+    std::optional<uint64_t> MaxCount = maxBackedgeTakenCount(*L, SE);
+    if (MaxCount && *MaxCount < loopPollChunk())
       ToRemove.push_back(Poll);
     else
       Poll->setMetadata(StripMineKind, MDNode::get(F.getContext(), {}));
