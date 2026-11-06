@@ -801,5 +801,7 @@ internal val NativeSecondStageCompilationConfig.codegenCpuFeatures: String?
         "native" -> llvm.LLVMGetHostCPUFeatures()?.let { features ->
             try { features.toKString() } finally { llvm.LLVMDisposeMessage(features) }
         }
-        else -> platform.targetCpuFeatures
+        // An explicit CPU model brings its own features (e.g. `x86-64` to run on CPUs older than the default `x86-64-v2`).
+        null -> platform.targetCpuFeatures
+        else -> null
     }
