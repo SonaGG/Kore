@@ -1,7 +1,35 @@
 # Kore: removing the per-object GC word
 
-Status: design. Prerequisite for compressed references (`compressed-refs.md`). The aim is to close the remaining
-gaps to the JVM on code dominated by small objects (boxed `Int`s, 24-byte nodes).
+Status: implemented (option B below), on by default where supported; see "Implementation". Prerequisite for compressed
+references (`compressed-refs.md`). The aim is to close the remaining gaps to the JVM on code dominated by small objects
+(boxed `Int`s, 24-byte nodes).
+
+## Implementation
+
+- **Mark stacks** (`gc/gen/cpp/MarkStack.hpp`): `ChunkedStack`, chunks of 512 object pointers with the subset of the
+  `intrusive_forward_list` interface that `ParallelProcessor` uses (a batch is one chunk, so sharing it moves a
+  pointer). The mark state is one bit: whoever sets it pushes the object.
+- **Header bits** (`gc/gen/cpp/ObjectData.hpp`, `ObjectBits`): with the custom allocator, mark (4), old (8) and
+  remembered (16) are bits 2-4 of the header word. `Kotlin_objectHeaderFlagsMask` (defined by the allocator module: 31
+  for custom, 3 for legacy/std) is what `ObjHeader::type_info()` and the compiler's `loadTypeInfo` (`immTypeInfoMask`)
+  clear. The legacy allocator keeps the bits in the GC word, at the same positions, since its meta objects are not 32-byte
+  aligned.
+  - Type infos are 32-byte aligned (compiler: `TYPE_INFO_ALIGNMENT`; C++ test type infos; ObjC-created ones), and so are
+    meta objects (`ExtraObjectCell`, 32-byte aligned pages, `calloc` fallback aligned in `GCApi.cpp`).
+  - Every update of the header word is an atomic read-modify-write that keeps the rest of the word: the GC's
+    `fetch_or`/`fetch_and`/CAS on the bits, and `ExtraObjectData::Install`/`UnlinkFromBaseObject`, which CAS the pointer
+    and keep the bits (a CAS that failed only because the bits changed is retried). The bits are accessed through a
+    `may_alias` integer type, since the field is a `TypeInfo*` elsewhere.
+  - Stack objects (tag 3) and permanent objects (tag 1) never get bits: the GC and the barriers only touch heap objects
+    (tag 0). The tag bits keep their meaning.
+  - The nursery keeps its forwarding addresses in the GC word (it is not compatible with dropping it).
+- **No GC word** (`-Xbinary=gcWord=false`, the default where supported): `descriptor<GC::ObjectData>::size()` is 0, so
+  `HeapObject` layouts, the inlined bump allocation, sweeping and conservative lookups place the object at the start of
+  its memory. Supported only with the generational GC, the custom allocator, Immix and no nursery: paged allocation
+  keeps free lists in the first word of free blocks, and the nursery needs the word for forwarding. The compiler keeps
+  the word in other configurations.
+- Known: the nursery configuration (`gcNurserySize`) hangs on some multithreaded stress programs, before and after this
+  change.
 
 ## Today
 
