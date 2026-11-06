@@ -294,6 +294,10 @@ class NativeSecondStageCompilationConfig(
     val primitiveCollections: Boolean
         get() = configuration.get(BinaryOptions.primitiveCollections) ?: true
 
+    // Kore: see [org.jetbrains.kotlin.backend.konan.lower.Monomorphization].
+    val monomorphization: Boolean
+        get() = configuration.get(BinaryOptions.monomorphization) ?: false
+
     // Kore: see [BinaryOptions.invariantTypeInfo].
     val invariantTypeInfo: Boolean
         get() = configuration.get(BinaryOptions.invariantTypeInfo) ?: true

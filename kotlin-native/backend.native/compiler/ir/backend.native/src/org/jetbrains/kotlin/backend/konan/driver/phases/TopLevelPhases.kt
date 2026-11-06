@@ -147,6 +147,14 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
             }
         }
 
+        // Kore: see [org.jetbrains.kotlin.backend.konan.lower.Monomorphization].
+        fun NativeGenerationState.runMonomorphization(fragment: BackendJobFragment) {
+            runEngineForLowerings {
+                val modules = listOf(fragment.irModule) + findDependenciesToCompile().reversed()
+                org.jetbrains.kotlin.backend.konan.lower.Monomorphization(context.context, modules).run()
+            }
+        }
+
         // Kore: see [org.jetbrains.kotlin.backend.konan.lower.PrimitiveCollections].
         fun NativeGenerationState.runPrimitiveCollections(fragment: BackendJobFragment) {
             runEngineForLowerings {
@@ -188,6 +196,7 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, validateIrAfterInliningAllFunctions) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, listOf(constEvaluationPhase)) }
             if (context.config.suspendFastPath) fragmentWithState.forEach { [fragment, state] -> state.runSuspendFastPath(fragment) }
+            if (context.config.monomorphization && context.shouldOptimize()) fragmentWithState.forEach { [fragment, state] -> state.runMonomorphization(fragment) }
             if (context.config.primitiveCollections) fragmentWithState.forEach { [fragment, state] -> state.runPrimitiveCollections(fragment) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, state.context.config.getLoweringsAfterInlining()) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, validateIrAfterLowering) }

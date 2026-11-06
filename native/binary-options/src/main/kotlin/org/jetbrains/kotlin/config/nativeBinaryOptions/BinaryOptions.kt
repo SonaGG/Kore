@@ -90,6 +90,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: replace local HashMap<Int, Int>s with maps that keep primitives, without boxing (default: true).
     val primitiveCollections by booleanOption()
 
+    // Kore: specialize generic classes and functions for primitive type arguments (default: false, in progress).
+    val monomorphization by booleanOption()
+
     // Kore: load type infos and their virtual and interface tables as invariant, so lookups are hoisted and shared.
     val invariantTypeInfo by booleanOption()
 
