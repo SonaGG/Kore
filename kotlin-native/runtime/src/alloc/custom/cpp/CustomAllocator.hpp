@@ -41,17 +41,19 @@ public:
     void RetireNursery() noexcept;
 
     // Kore: memory in the regular heap for an object moved out of the nursery.
-    uint8_t* AllocateForEvacuation(AllocationSize size) noexcept { return Allocate(size); }
+    uint8_t* AllocateForEvacuation(AllocationSize size) noexcept { return Allocate(size, /* poll = */ false); }
 
     Heap& heap() noexcept {
         return heap_;
     }
 
 private:
-    uint8_t* Allocate(AllocationSize size) noexcept;
-    uint8_t* AllocateInSingleObjectPage(uint64_t cellCount) noexcept;
-    uint8_t* AllocateInNextFitPage(uint32_t cellCount) noexcept;
-    uint8_t* AllocateInFixedBlockPage(uint32_t cellCount) noexcept;
+    // Kore: with `poll`, a mutator polls before taking a new page or allocating a large object (not the GC thread,
+    // which evacuates with it).
+    uint8_t* Allocate(AllocationSize size, bool poll = true) noexcept;
+    uint8_t* AllocateInSingleObjectPage(uint64_t cellCount, bool poll) noexcept;
+    uint8_t* AllocateInNextFitPage(uint32_t cellCount, bool poll) noexcept;
+    uint8_t* AllocateInFixedBlockPage(uint32_t cellCount, bool poll) noexcept;
     uint8_t* AllocateExtraObjectData() noexcept;
 
     // Kore: bump allocation in the thread's nursery block, or null.

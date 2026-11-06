@@ -17,6 +17,7 @@
 #include "Memory.h"
 #include "FixedBlockPage.hpp"
 #include "GCApi.hpp"
+#include "SafePoint.hpp"
 
 namespace kotlin::alloc {
 
@@ -86,6 +87,9 @@ uint8_t* CustomAllocator::RefillNursery(size_t bytes) noexcept {
     // Notify first: the scheduler may suspend this thread for a collection, which must not see a block owned by it
     // (with an object not constructed yet), and may free the blocks.
     heap_.allocatedSizeTracker().recordDifferenceAndNotifyScheduler(static_cast<std::ptrdiff_t>(Nursery::kBlockSize));
+    // Kore: and poll, so that a thread that allocates (and may have requested the collection by doing so) stops soon
+    // even in code without other polls. Allocations are GC points for the compiled code.
+    mm::safePoint();
     uint8_t* start;
     uint8_t* end;
     if (!Nursery::instance()->takeBlock(start, end)) {
@@ -111,35 +115,38 @@ size_t CustomAllocator::GetAllocatedHeapSize(ObjHeader* object) noexcept {
     return CustomHeapObject::from(object).size();
 }
 
-uint8_t* CustomAllocator::Allocate(AllocationSize size) noexcept {
+uint8_t* CustomAllocator::Allocate(AllocationSize size, bool poll) noexcept {
     RuntimeAssert(size > AllocationSize::cells(0), "CustomAllocator::Allocate cannot allocate 0 bytes");
     CustomAllocDebug("CustomAllocator::Allocate(%" PRIu64 ")", size.inBytes());
     uint64_t cellCount = size.inCells();
     if (!compiler::pagedAllocator()) {
-        return AllocateInSingleObjectPage(cellCount);
+        return AllocateInSingleObjectPage(cellCount, poll);
     }
     if (cellCount <= FixedBlockPage::MAX_BLOCK_SIZE) {
-        return AllocateInFixedBlockPage(cellCount);
+        return AllocateInFixedBlockPage(cellCount, poll);
     }
     if (cellCount > NextFitPage::maxBlockSize()) {
-        return AllocateInSingleObjectPage(cellCount);
+        return AllocateInSingleObjectPage(cellCount, poll);
     }
-    return AllocateInNextFitPage(cellCount);
+    return AllocateInNextFitPage(cellCount, poll);
 }
 
-uint8_t* CustomAllocator::AllocateInSingleObjectPage(uint64_t cellCount) noexcept {
+uint8_t* CustomAllocator::AllocateInSingleObjectPage(uint64_t cellCount, bool poll) noexcept {
     CustomAllocDebug("CustomAllocator::AllocateInSingleObjectPage(%" PRIu64 ")", cellCount);
+    // Kore: see `Allocate`. Large objects are rare, and slow to allocate anyway.
+    if (poll) mm::safePoint();
     uint8_t* block = heap_.GetSingleObjectPage(cellCount)->Allocate();
     return block;
 }
 
-uint8_t* CustomAllocator::AllocateInNextFitPage(uint32_t cellCount) noexcept {
+uint8_t* CustomAllocator::AllocateInNextFitPage(uint32_t cellCount, bool poll) noexcept {
     CustomAllocDebug("CustomAllocator::AllocateInNextFitPage(%u)", cellCount);
     if (nextFitPage_) {
         uint8_t* block = nextFitPage_->TryAllocate(cellCount);
         if (block) return block;
     }
     CustomAllocDebug("Failed to allocate in curPage");
+    if (poll) mm::safePoint(); // Kore: see `Allocate`.
     while (true) {
         nextFitPage_ = heap_.GetNextFitPage(cellCount, finalizerQueue_);
         uint8_t* block = nextFitPage_->TryAllocate(cellCount);
@@ -147,7 +154,7 @@ uint8_t* CustomAllocator::AllocateInNextFitPage(uint32_t cellCount) noexcept {
     }
 }
 
-uint8_t* CustomAllocator::AllocateInFixedBlockPage(uint32_t cellCount) noexcept {
+uint8_t* CustomAllocator::AllocateInFixedBlockPage(uint32_t cellCount, bool poll) noexcept {
     CustomAllocDebug("CustomAllocator::AllocateInFixedBlockPage(%u)", cellCount);
     FixedBlockPage* page = fixedBlockPages_[cellCount];
     if (page) {
@@ -155,6 +162,7 @@ uint8_t* CustomAllocator::AllocateInFixedBlockPage(uint32_t cellCount) noexcept 
         if (block) return block;
     }
     CustomAllocDebug("Failed to allocate in current FixedBlockPage");
+    if (poll) mm::safePoint(); // Kore: see `Allocate`.
     while ((page = heap_.GetFixedBlockPage(cellCount, finalizerQueue_))) {
         uint8_t* block = page->TryAllocate();
         if (block) {
