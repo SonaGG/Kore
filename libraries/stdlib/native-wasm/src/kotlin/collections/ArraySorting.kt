@@ -111,161 +111,6 @@ private fun <T> mergeSort(array: Array<T>, buffer: Array<T>, start: Int, end: In
     return target
 }
 
-// ByteArray    =============================================================================
-private fun partition(
-        array: ByteArray, left: Int, right: Int): Int {
-    var i = left
-    var j = right
-    val pivot = array[(left + right) / 2]
-    while (i <= j) {
-        while (array[i] < pivot)
-            i++
-        while (array[j] > pivot)
-            j--
-        if (i <= j) {
-            val tmp = array[i]
-            array[i] = array[j]
-            array[j] = tmp
-            i++
-            j--
-        }
-    }
-    return i
-}
-
-private fun quickSort(
-        array: ByteArray, left: Int, right: Int) {
-    val index = partition(array, left, right)
-    if (left < index - 1)
-        quickSort(array, left, index - 1)
-    if (index < right)
-        quickSort(array, index, right)
-}
-
-// ShortArray   =============================================================================
-private fun partition(
-        array: ShortArray, left: Int, right: Int): Int {
-    var i = left
-    var j = right
-    val pivot = array[(left + right) / 2]
-    while (i <= j) {
-        while (array[i] < pivot)
-            i++
-        while (array[j] > pivot)
-            j--
-        if (i <= j) {
-            val tmp = array[i]
-            array[i] = array[j]
-            array[j] = tmp
-            i++
-            j--
-        }
-    }
-    return i
-}
-
-private fun quickSort(
-        array: ShortArray, left: Int, right: Int) {
-    val index = partition(array, left, right)
-    if (left < index - 1)
-        quickSort(array, left, index - 1)
-    if (index < right)
-        quickSort(array, index, right)
-}
-
-// IntArray     =============================================================================
-private fun partition(
-        array: IntArray, left: Int, right: Int): Int {
-    var i = left
-    var j = right
-    val pivot = array[(left + right) / 2]
-    while (i <= j) {
-        while (array[i] < pivot)
-            i++
-        while (array[j] > pivot)
-            j--
-        if (i <= j) {
-            val tmp = array[i]
-            array[i] = array[j]
-            array[j] = tmp
-            i++
-            j--
-        }
-    }
-    return i
-}
-
-private fun quickSort(
-        array: IntArray, left: Int, right: Int) {
-    val index = partition(array, left, right)
-    if (left < index - 1)
-        quickSort(array, left, index - 1)
-    if (index < right)
-        quickSort(array, index, right)
-}
-
-// LongArray    =============================================================================
-private fun partition(
-        array: LongArray, left: Int, right: Int): Int {
-    var i = left
-    var j = right
-    val pivot = array[(left + right) / 2]
-    while (i <= j) {
-        while (array[i] < pivot)
-            i++
-        while (array[j] > pivot)
-            j--
-        if (i <= j) {
-            val tmp = array[i]
-            array[i] = array[j]
-            array[j] = tmp
-            i++
-            j--
-        }
-    }
-    return i
-}
-
-private fun quickSort(
-        array: LongArray, left: Int, right: Int) {
-    val index = partition(array, left, right)
-    if (left < index - 1)
-        quickSort(array, left, index - 1)
-    if (index < right)
-        quickSort(array, index, right)
-}
-
-// CharArray    =============================================================================
-private fun partition(
-        array: CharArray, left: Int, right: Int): Int {
-    var i = left
-    var j = right
-    val pivot = array[(left + right) / 2]
-    while (i <= j) {
-        while (array[i] < pivot)
-            i++
-        while (array[j] > pivot)
-            j--
-        if (i <= j) {
-            val tmp = array[i]
-            array[i] = array[j]
-            array[j] = tmp
-            i++
-            j--
-        }
-    }
-    return i
-}
-
-private fun quickSort(
-        array: CharArray, left: Int, right: Int) {
-    val index = partition(array, left, right)
-    if (left < index - 1)
-        quickSort(array, left, index - 1)
-    if (index < right)
-        quickSort(array, index, right)
-}
-
 // FloatArray   =============================================================================
 private fun partition(
         array: FloatArray, left: Int, right: Int): Int {
@@ -385,11 +230,408 @@ internal fun <T: Comparable<T>> sortArray(array: Array<out T>, fromIndex: Int, t
 /**
  * Sorts the given array using qsort algorithm.
  */
-internal fun sortArray(array: ByteArray, fromIndex: Int, toIndex: Int)    = quickSort(array, fromIndex, toIndex - 1)
-internal fun sortArray(array: ShortArray, fromIndex: Int, toIndex: Int)   = quickSort(array, fromIndex, toIndex - 1)
-internal fun sortArray(array: IntArray, fromIndex: Int, toIndex: Int)     = quickSort(array, fromIndex, toIndex - 1)
-internal fun sortArray(array: LongArray, fromIndex: Int, toIndex: Int)    = quickSort(array, fromIndex, toIndex - 1)
-internal fun sortArray(array: CharArray, fromIndex: Int, toIndex: Int)    = quickSort(array, fromIndex, toIndex - 1)
+internal fun sortArray(array: ByteArray, fromIndex: Int, toIndex: Int) = introSort(array, fromIndex, toIndex)
+internal fun sortArray(array: ShortArray, fromIndex: Int, toIndex: Int) = introSort(array, fromIndex, toIndex)
+internal fun sortArray(array: IntArray, fromIndex: Int, toIndex: Int) = introSort(array, fromIndex, toIndex)
+internal fun sortArray(array: LongArray, fromIndex: Int, toIndex: Int) = introSort(array, fromIndex, toIndex)
+internal fun sortArray(array: CharArray, fromIndex: Int, toIndex: Int) = introSort(array, fromIndex, toIndex)
 internal fun sortArray(array: FloatArray, fromIndex: Int, toIndex: Int)   = quickSort(array, fromIndex, toIndex - 1)
 internal fun sortArray(array: DoubleArray, fromIndex: Int, toIndex: Int)  = quickSort(array, fromIndex, toIndex - 1)
 internal fun sortArray(array: BooleanArray, fromIndex: Int, toIndex: Int) = quickSort(array, fromIndex, toIndex - 1)
+
+private const val INTRO_SORT_INSERTION_THRESHOLD = 24
+
+// Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
+// smaller side, insertion sort for short ranges, heapsort when the recursion gets too deep (no quadratic worst case).
+// The order is the same as the quicksort's (integers have a total order, and the sort is not stable either way).
+private fun introSort(array: ByteArray, lo0: Int, hi0: Int, depth0: Int) {
+    var lo = lo0
+    var hi = hi0
+    var depth = depth0
+    while (hi - lo > INTRO_SORT_INSERTION_THRESHOLD) {
+        if (depth == 0) {
+            heapSort(array, lo, hi)
+            return
+        }
+        depth--
+        val a = array[lo]
+        val b = array[(lo + hi) ushr 1]
+        val c = array[hi]
+        val pivot = if (a < b) (if (b < c) b else if (a < c) c else a) else (if (a < c) a else if (b < c) c else b)
+        var i = lo
+        var j = hi
+        while (i <= j) {
+            while (array[i] < pivot) i++
+            while (array[j] > pivot) j--
+            if (i <= j) {
+                val tmp = array[i]
+                array[i] = array[j]
+                array[j] = tmp
+                i++
+                j--
+            }
+        }
+        if (j - lo < hi - i) {
+            introSort(array, lo, j, depth)
+            lo = i
+        } else {
+            introSort(array, i, hi, depth)
+            hi = j
+        }
+    }
+    for (k in lo + 1..hi) {
+        val value = array[k]
+        var m = k - 1
+        while (m >= lo && array[m] > value) {
+            array[m + 1] = array[m]
+            m--
+        }
+        array[m + 1] = value
+    }
+}
+
+private fun heapSort(array: ByteArray, lo: Int, hi: Int) {
+    val n = hi - lo + 1
+    fun siftDown(start: Int, size: Int) {
+        var root = start
+        while (true) {
+            var child = 2 * root + 1
+            if (child >= size) return
+            if (child + 1 < size && array[lo + child] < array[lo + child + 1]) child++
+            if (array[lo + root] >= array[lo + child]) return
+            val tmp = array[lo + root]
+            array[lo + root] = array[lo + child]
+            array[lo + child] = tmp
+            root = child
+        }
+    }
+    for (start in n / 2 - 1 downTo 0) siftDown(start, n)
+    for (end in n - 1 downTo 1) {
+        val tmp = array[lo]
+        array[lo] = array[lo + end]
+        array[lo + end] = tmp
+        siftDown(0, end)
+    }
+}
+
+private fun introSort(array: ByteArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    if (n < 2) return
+    introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
+
+// Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
+// smaller side, insertion sort for short ranges, heapsort when the recursion gets too deep (no quadratic worst case).
+// The order is the same as the quicksort's (integers have a total order, and the sort is not stable either way).
+private fun introSort(array: ShortArray, lo0: Int, hi0: Int, depth0: Int) {
+    var lo = lo0
+    var hi = hi0
+    var depth = depth0
+    while (hi - lo > INTRO_SORT_INSERTION_THRESHOLD) {
+        if (depth == 0) {
+            heapSort(array, lo, hi)
+            return
+        }
+        depth--
+        val a = array[lo]
+        val b = array[(lo + hi) ushr 1]
+        val c = array[hi]
+        val pivot = if (a < b) (if (b < c) b else if (a < c) c else a) else (if (a < c) a else if (b < c) c else b)
+        var i = lo
+        var j = hi
+        while (i <= j) {
+            while (array[i] < pivot) i++
+            while (array[j] > pivot) j--
+            if (i <= j) {
+                val tmp = array[i]
+                array[i] = array[j]
+                array[j] = tmp
+                i++
+                j--
+            }
+        }
+        if (j - lo < hi - i) {
+            introSort(array, lo, j, depth)
+            lo = i
+        } else {
+            introSort(array, i, hi, depth)
+            hi = j
+        }
+    }
+    for (k in lo + 1..hi) {
+        val value = array[k]
+        var m = k - 1
+        while (m >= lo && array[m] > value) {
+            array[m + 1] = array[m]
+            m--
+        }
+        array[m + 1] = value
+    }
+}
+
+private fun heapSort(array: ShortArray, lo: Int, hi: Int) {
+    val n = hi - lo + 1
+    fun siftDown(start: Int, size: Int) {
+        var root = start
+        while (true) {
+            var child = 2 * root + 1
+            if (child >= size) return
+            if (child + 1 < size && array[lo + child] < array[lo + child + 1]) child++
+            if (array[lo + root] >= array[lo + child]) return
+            val tmp = array[lo + root]
+            array[lo + root] = array[lo + child]
+            array[lo + child] = tmp
+            root = child
+        }
+    }
+    for (start in n / 2 - 1 downTo 0) siftDown(start, n)
+    for (end in n - 1 downTo 1) {
+        val tmp = array[lo]
+        array[lo] = array[lo + end]
+        array[lo + end] = tmp
+        siftDown(0, end)
+    }
+}
+
+private fun introSort(array: ShortArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    if (n < 2) return
+    introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
+
+// Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
+// smaller side, insertion sort for short ranges, heapsort when the recursion gets too deep (no quadratic worst case).
+// The order is the same as the quicksort's (integers have a total order, and the sort is not stable either way).
+private fun introSort(array: IntArray, lo0: Int, hi0: Int, depth0: Int) {
+    var lo = lo0
+    var hi = hi0
+    var depth = depth0
+    while (hi - lo > INTRO_SORT_INSERTION_THRESHOLD) {
+        if (depth == 0) {
+            heapSort(array, lo, hi)
+            return
+        }
+        depth--
+        val a = array[lo]
+        val b = array[(lo + hi) ushr 1]
+        val c = array[hi]
+        val pivot = if (a < b) (if (b < c) b else if (a < c) c else a) else (if (a < c) a else if (b < c) c else b)
+        var i = lo
+        var j = hi
+        while (i <= j) {
+            while (array[i] < pivot) i++
+            while (array[j] > pivot) j--
+            if (i <= j) {
+                val tmp = array[i]
+                array[i] = array[j]
+                array[j] = tmp
+                i++
+                j--
+            }
+        }
+        if (j - lo < hi - i) {
+            introSort(array, lo, j, depth)
+            lo = i
+        } else {
+            introSort(array, i, hi, depth)
+            hi = j
+        }
+    }
+    for (k in lo + 1..hi) {
+        val value = array[k]
+        var m = k - 1
+        while (m >= lo && array[m] > value) {
+            array[m + 1] = array[m]
+            m--
+        }
+        array[m + 1] = value
+    }
+}
+
+private fun heapSort(array: IntArray, lo: Int, hi: Int) {
+    val n = hi - lo + 1
+    fun siftDown(start: Int, size: Int) {
+        var root = start
+        while (true) {
+            var child = 2 * root + 1
+            if (child >= size) return
+            if (child + 1 < size && array[lo + child] < array[lo + child + 1]) child++
+            if (array[lo + root] >= array[lo + child]) return
+            val tmp = array[lo + root]
+            array[lo + root] = array[lo + child]
+            array[lo + child] = tmp
+            root = child
+        }
+    }
+    for (start in n / 2 - 1 downTo 0) siftDown(start, n)
+    for (end in n - 1 downTo 1) {
+        val tmp = array[lo]
+        array[lo] = array[lo + end]
+        array[lo + end] = tmp
+        siftDown(0, end)
+    }
+}
+
+private fun introSort(array: IntArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    if (n < 2) return
+    introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
+
+// Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
+// smaller side, insertion sort for short ranges, heapsort when the recursion gets too deep (no quadratic worst case).
+// The order is the same as the quicksort's (integers have a total order, and the sort is not stable either way).
+private fun introSort(array: LongArray, lo0: Int, hi0: Int, depth0: Int) {
+    var lo = lo0
+    var hi = hi0
+    var depth = depth0
+    while (hi - lo > INTRO_SORT_INSERTION_THRESHOLD) {
+        if (depth == 0) {
+            heapSort(array, lo, hi)
+            return
+        }
+        depth--
+        val a = array[lo]
+        val b = array[(lo + hi) ushr 1]
+        val c = array[hi]
+        val pivot = if (a < b) (if (b < c) b else if (a < c) c else a) else (if (a < c) a else if (b < c) c else b)
+        var i = lo
+        var j = hi
+        while (i <= j) {
+            while (array[i] < pivot) i++
+            while (array[j] > pivot) j--
+            if (i <= j) {
+                val tmp = array[i]
+                array[i] = array[j]
+                array[j] = tmp
+                i++
+                j--
+            }
+        }
+        if (j - lo < hi - i) {
+            introSort(array, lo, j, depth)
+            lo = i
+        } else {
+            introSort(array, i, hi, depth)
+            hi = j
+        }
+    }
+    for (k in lo + 1..hi) {
+        val value = array[k]
+        var m = k - 1
+        while (m >= lo && array[m] > value) {
+            array[m + 1] = array[m]
+            m--
+        }
+        array[m + 1] = value
+    }
+}
+
+private fun heapSort(array: LongArray, lo: Int, hi: Int) {
+    val n = hi - lo + 1
+    fun siftDown(start: Int, size: Int) {
+        var root = start
+        while (true) {
+            var child = 2 * root + 1
+            if (child >= size) return
+            if (child + 1 < size && array[lo + child] < array[lo + child + 1]) child++
+            if (array[lo + root] >= array[lo + child]) return
+            val tmp = array[lo + root]
+            array[lo + root] = array[lo + child]
+            array[lo + child] = tmp
+            root = child
+        }
+    }
+    for (start in n / 2 - 1 downTo 0) siftDown(start, n)
+    for (end in n - 1 downTo 1) {
+        val tmp = array[lo]
+        array[lo] = array[lo + end]
+        array[lo + end] = tmp
+        siftDown(0, end)
+    }
+}
+
+private fun introSort(array: LongArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    if (n < 2) return
+    introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
+
+// Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
+// smaller side, insertion sort for short ranges, heapsort when the recursion gets too deep (no quadratic worst case).
+// The order is the same as the quicksort's (integers have a total order, and the sort is not stable either way).
+private fun introSort(array: CharArray, lo0: Int, hi0: Int, depth0: Int) {
+    var lo = lo0
+    var hi = hi0
+    var depth = depth0
+    while (hi - lo > INTRO_SORT_INSERTION_THRESHOLD) {
+        if (depth == 0) {
+            heapSort(array, lo, hi)
+            return
+        }
+        depth--
+        val a = array[lo]
+        val b = array[(lo + hi) ushr 1]
+        val c = array[hi]
+        val pivot = if (a < b) (if (b < c) b else if (a < c) c else a) else (if (a < c) a else if (b < c) c else b)
+        var i = lo
+        var j = hi
+        while (i <= j) {
+            while (array[i] < pivot) i++
+            while (array[j] > pivot) j--
+            if (i <= j) {
+                val tmp = array[i]
+                array[i] = array[j]
+                array[j] = tmp
+                i++
+                j--
+            }
+        }
+        if (j - lo < hi - i) {
+            introSort(array, lo, j, depth)
+            lo = i
+        } else {
+            introSort(array, i, hi, depth)
+            hi = j
+        }
+    }
+    for (k in lo + 1..hi) {
+        val value = array[k]
+        var m = k - 1
+        while (m >= lo && array[m] > value) {
+            array[m + 1] = array[m]
+            m--
+        }
+        array[m + 1] = value
+    }
+}
+
+private fun heapSort(array: CharArray, lo: Int, hi: Int) {
+    val n = hi - lo + 1
+    fun siftDown(start: Int, size: Int) {
+        var root = start
+        while (true) {
+            var child = 2 * root + 1
+            if (child >= size) return
+            if (child + 1 < size && array[lo + child] < array[lo + child + 1]) child++
+            if (array[lo + root] >= array[lo + child]) return
+            val tmp = array[lo + root]
+            array[lo + root] = array[lo + child]
+            array[lo + child] = tmp
+            root = child
+        }
+    }
+    for (start in n / 2 - 1 downTo 0) siftDown(start, n)
+    for (end in n - 1 downTo 1) {
+        val tmp = array[lo]
+        array[lo] = array[lo + end]
+        array[lo + end] = tmp
+        siftDown(0, end)
+    }
+}
+
+private fun introSort(array: CharArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    if (n < 2) return
+    introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
