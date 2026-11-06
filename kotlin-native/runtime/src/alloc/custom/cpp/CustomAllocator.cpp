@@ -44,6 +44,38 @@ CustomAllocator::~CustomAllocator() {
 }
 
 ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
+    // Kore: the common case, small enough to be inlined into the compiled code (the runtime is linked with it): bump
+    // allocation in the thread's nursery block, or else in its current Immix hole. Both are zeroed. Everything else
+    // (refills, objects with finalizers, other allocators) is out of line.
+    if ((typeInfo->flags_ & TF_HAS_FINALIZER) == 0 && (compiler::gcNurserySize() > 0 || compiler::immix())) {
+        auto descriptor = CustomHeapObject::descriptorFrom(typeInfo);
+        size_t bytes = AllocationSize::bytesAtLeast(descriptor.size()).inBytes();
+        uint8_t* memory = nullptr;
+        if (compiler::gcNurserySize() > 0) {
+            uint8_t* top = nurseryTop_;
+            if (__builtin_expect(bytes <= Nursery::kMaxObjectBytes && bytes <= static_cast<size_t>(nurseryEnd_ - top), true)) {
+                nurseryTop_ = top + bytes;
+                memory = top;
+            }
+        } else {
+            uint8_t* top = immixCursor_;
+            if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
+                immixCursor_ = top + bytes;
+                ImmixBlock::MarkStart(top);
+                memory = top;
+            }
+        }
+        if (__builtin_expect(memory != nullptr, true)) {
+            type_layout::descriptor_t<gc::GC::ObjectData>::construct(memory);
+            auto* object = reinterpret_cast<ObjHeader*>(memory + descriptor.fieldOffset<1>());
+            object->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
+            return object;
+        }
+    }
+    return CreateObjectSlowPath(typeInfo);
+}
+
+ObjHeader* CustomAllocator::CreateObjectSlowPath(const TypeInfo* typeInfo) noexcept {
     RuntimeAssert(!typeInfo->IsArray(), "Must not be an array");
     auto descriptor = CustomHeapObject::descriptorFrom(typeInfo);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());

@@ -58,6 +58,8 @@ private:
     uint8_t* AllocateInFixedBlockPage(uint32_t cellCount, bool poll) noexcept;
     uint8_t* AllocateExtraObjectData() noexcept;
 
+    NO_INLINE ObjHeader* CreateObjectSlowPath(const TypeInfo* typeInfo) noexcept;
+
     // Kore: bump allocation in the thread's nursery block, or null.
     ALWAYS_INLINE uint8_t* TryAllocateInNursery(AllocationSize size) noexcept {
         size_t bytes = size.inBytes();
