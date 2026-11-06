@@ -165,18 +165,36 @@ internal class CollectionFusion(private val context: Context, private val module
         }
     }
 
+    // Whether [body] creates a list, and is not a coroutine: the variables live across its suspension points are already
+    // computed, so no variable is added or moved there.
     private fun hasListCreation(body: IrBody): Boolean {
         var found = false
+        var suspends = false
         body.acceptVoid(object : IrVisitorVoid() {
             override fun visitElement(element: IrElement) {
-                if (!found) element.acceptChildrenVoid(this)
+                if (!suspends) element.acceptChildrenVoid(this)
             }
 
             override fun visitVariable(declaration: IrVariable) {
-                if (isListCreation(declaration)) found = true else super.visitVariable(declaration)
+                if (isListCreation(declaration)) found = true
+                super.visitVariable(declaration)
+            }
+
+            override fun visitSuspensionPoint(expression: IrSuspensionPoint) {
+                suspends = true
+            }
+
+            override fun visitSuspendableExpression(expression: IrSuspendableExpression) {
+                suspends = true
+            }
+
+            override fun visitCall(expression: IrCall) {
+                val name = expression.symbol.owner.name.asString()
+                if (name == "saveCoroutineState" || name == "restoreCoroutineState") suspends = true
+                super.visitCall(expression)
             }
         })
-        return found
+        return found && !suspends
     }
 
     // ---------------------------------------------------------------------------------------------------------------------
@@ -336,6 +354,7 @@ internal class CollectionFusion(private val context: Context, private val module
         var throws = false
         var mayNotTerminate = false
         var hasTry = false
+        var suspends = false
         val reads = HashSet<IrValueDeclaration>()
         val writes = HashSet<IrValueDeclaration>()
         val declared = HashSet<IrVariable>()
@@ -419,6 +438,16 @@ internal class CollectionFusion(private val context: Context, private val module
             }
 
             override fun visitConst(expression: IrConst) {}
+
+            override fun visitSuspensionPoint(expression: IrSuspensionPoint) {
+                effects.suspends = true
+                super.visitSuspensionPoint(expression)
+            }
+
+            override fun visitSuspendableExpression(expression: IrSuspendableExpression) {
+                effects.suspends = true
+                super.visitSuspendableExpression(expression)
+            }
 
             override fun visitGetValue(expression: IrGetValue) {
                 effects.reads.add(expression.symbol.owner)
@@ -652,6 +681,8 @@ internal class CollectionFusion(private val context: Context, private val module
         val consumerPure = !consumerEffects.heapWrite && !consumerEffects.throws && !consumerEffects.mayNotTerminate &&
                 consumerEffects.writes.all { it in declaredInK } && consumerEffects.localLists.all { it.creation in declaredInK }
         if (!producerPure && !consumerPure) return reject("both sides have effects")
+        // Code is not moved across suspension points.
+        if (producerEffects.suspends || consumerEffects.suspends || betweenEffects.suspends) return reject("suspension")
         if (producerEffects.heapWrite && consumerEffects.heapRead) return reject("consumer reads memory the producer writes")
         if (consumerEffects.heapWrite && producerEffects.heapRead) return reject("producer reads memory the consumer writes")
         if (consumerEffects.heapWrite && betweenEffects.heapRead) return reject("code between reads memory the consumer writes")
