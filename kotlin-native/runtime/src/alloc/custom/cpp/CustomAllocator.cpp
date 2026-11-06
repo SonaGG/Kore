@@ -99,6 +99,29 @@ ObjHeader* CustomAllocator::CreateObjectSlowPath(const TypeInfo* typeInfo) noexc
 }
 
 ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t count) noexcept {
+    // Kore: as CreateObject: small arrays are bump-allocated in the current Immix hole (zeroed), inlined into the
+    // compiled code; everything else (refills, the nursery, large arrays and their hints) is out of line.
+    if (compiler::immix() && compiler::gcNurserySize() == 0) {
+        auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
+        uint64_t size = descriptor.size();
+        uint8_t* top = immixCursor_;
+        if (__builtin_expect(size <= ImmixBlock::kMaxObjectBytes, true)) {
+            size_t bytes = AllocationSize::bytesAtLeast(size).inBytes();
+            if (__builtin_expect(bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
+                immixCursor_ = top + bytes;
+                ImmixBlock::MarkStart(top);
+                auto& heapArray = *descriptor.construct(top);
+                ArrayHeader* array = heapArray.array();
+                array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
+                array->count_ = count;
+                return array;
+            }
+        }
+    }
+    return CreateArraySlowPath(typeInfo, count);
+}
+
+ArrayHeader* CustomAllocator::CreateArraySlowPath(const TypeInfo* typeInfo, uint32_t count) noexcept {
     CustomAllocDebug("CustomAllocator@%p::CreateArray(%d)", this ,count);
     RuntimeAssert(typeInfo->IsArray(), "Must be an array");
     auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);

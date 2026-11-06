@@ -30,6 +30,7 @@ public:
     ObjHeader* CreateObject(const TypeInfo* typeInfo) noexcept;
 
     ArrayHeader* CreateArray(const TypeInfo* typeInfo, uint32_t count) noexcept;
+    NO_INLINE ArrayHeader* CreateArraySlowPath(const TypeInfo* typeInfo, uint32_t count) noexcept;
 
     mm::ExtraObjectData* CreateExtraObjectDataForObject(ObjHeader* baseObject, const TypeInfo* type) noexcept;
 
