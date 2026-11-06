@@ -47,6 +47,18 @@ struct ExtraDataSweepTraits {
 
 void* SafeAlloc(uint64_t size) noexcept;
 
+// Kore: like `SafeAlloc`, except that the `unzeroedLength` bytes from `unzeroedFrom` may be left as they are (the caller
+// overwrites them).
+void* SafeAlloc(uint64_t size, size_t unzeroedFrom, size_t unzeroedLength) noexcept;
+
+// Kore: the bytes of the next single-object page's object (from the start of its cell) that the caller overwrites, so
+// that `SingleObjectPage::Create` needs not zero them (see `tlsArrayOverwrittenPrefixBytes`). Reset by its reader.
+struct UnzeroedRange {
+    size_t from = 0;
+    size_t length = 0;
+};
+extern thread_local UnzeroedRange tlsSingleObjectPageUnzeroed;
+
 void Free(void* ptr, size_t size) noexcept;
 
 size_t GetAllocatedBytes() noexcept;

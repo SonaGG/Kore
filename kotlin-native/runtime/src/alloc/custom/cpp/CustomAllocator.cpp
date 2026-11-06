@@ -12,6 +12,7 @@
 #include <cstring>
 #include <new>
 
+#include "AllocationHints.hpp"
 #include "CustomLogging.hpp"
 #include "ExtraObjectData.hpp"
 #include "KAssert.h"
@@ -102,8 +103,17 @@ ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t cou
     RuntimeAssert(typeInfo->IsArray(), "Must be an array");
     auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
+    // Kore: a large array's elements that the caller overwrites need not be zeroed (see `tlsArrayOverwrittenPrefixBytes`).
+    // (Not with runtime assertions, which check that the memory of new objects is zeroed.)
+    size_t overwritten = tlsArrayOverwrittenPrefixBytes;
+    if (overwritten > 0 && compiler::runtimeAssertsMode() == compiler::RuntimeAssertsMode::kIgnore) {
+        constexpr uintptr_t kProbe = 4096; // The offset of the elements, computed on an aligned address.
+        auto elements = reinterpret_cast<uintptr_t>(reinterpret_cast<CustomHeapArray*>(kProbe)->array()) - kProbe + sizeof(ArrayHeader);
+        tlsSingleObjectPageUnzeroed = {static_cast<size_t>(elements), overwritten};
+    }
     uint8_t* memory = compiler::gcNurserySize() > 0 ? TryAllocateInNursery(size) : nullptr;
     if (memory == nullptr) memory = compiler::immix() ? AllocateInImmix(size, /* poll = */ true) : Allocate(size);
+    tlsSingleObjectPageUnzeroed = {};
     auto& heapArray = *descriptor.construct(memory);
     ArrayHeader* array = heapArray.array();
     array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);

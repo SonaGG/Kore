@@ -1435,6 +1435,8 @@ internal fun ByteArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int)
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 1 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as ByteArray
     val result = ByteArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1451,6 +1453,8 @@ internal fun ShortArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 2 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as ShortArray
     val result = ShortArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1467,6 +1471,8 @@ internal fun IntArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int):
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 4 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as IntArray
     val result = IntArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1483,6 +1489,8 @@ internal fun LongArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int)
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 8 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as LongArray
     val result = LongArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1499,6 +1507,8 @@ internal fun FloatArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 4 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as FloatArray
     val result = FloatArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1515,6 +1525,8 @@ internal fun DoubleArray.copyOfUninitializedElements(fromIndex: Int, toIndex: In
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 8 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as DoubleArray
     val result = DoubleArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1531,6 +1543,8 @@ internal fun BooleanArray.copyOfUninitializedElements(fromIndex: Int, toIndex: I
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 1 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as BooleanArray
     val result = BooleanArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result
@@ -1547,6 +1561,8 @@ internal fun CharArray.copyOfUninitializedElements(fromIndex: Int, toIndex: Int)
     if (newSize < 0) {
         throw IllegalArgumentException("$fromIndex > $toIndex")
     }
+    // Kore: large copies come from the runtime, which does not zero the copied elements first.
+    if (newSize >= LARGE_PRIMITIVE_COPY_BYTES / 2 && fromIndex >= 0 && fromIndex <= size) return copyOfPrimitiveRange(this, fromIndex, toIndex) as CharArray
     val result = CharArray(newSize)
     this.copyInto(result, 0, fromIndex, toIndex.coerceAtMost(size))
     return result

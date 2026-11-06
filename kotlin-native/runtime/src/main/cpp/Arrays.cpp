@@ -20,6 +20,7 @@
 
 #include "KAssert.h"
 #include "MemorySearch.hpp"
+#include "AllocationHints.hpp"
 #include "Exceptions.h"
 #include "Memory.h"
 #include "Natives.h"
@@ -859,3 +860,28 @@ KNativePtr Kotlin_Arrays_getDoubleArrayAddressOfElement(KRef thiz, KInt index) {
 }
 
 }  // extern "C"
+
+// Kore: the elements `fromIndex` until `toIndex` of a primitive array as a new array of the same type, zero past the
+// end of the array, as `copyOfUninitializedElements` (the indices are checked by the caller). The copied elements are
+// not zeroed first (see `tlsArrayOverwrittenPrefixBytes`), which saves writing memory twice when large arrays grow.
+thread_local size_t kotlin::alloc::tlsArrayOverwrittenPrefixBytes = 0;
+
+extern "C" OBJ_GETTER(Kotlin_Array_copyOfPrimitiveRange, KConstRef thiz, KInt fromIndex, KInt toIndex) {
+  const ArrayHeader* array = thiz->array();
+  const TypeInfo* typeInfo = array->type_info();
+  auto elementSize = static_cast<size_t>(-typeInfo->instanceSize_);
+  KInt newSize = toIndex - fromIndex;
+  KInt available = static_cast<KInt>(array->count_) - fromIndex;
+  KInt toCopy = available < newSize ? available : newSize;
+  if (toCopy < 0) toCopy = 0;
+  size_t copiedBytes = static_cast<size_t>(toCopy) * elementSize;
+  kotlin::alloc::tlsArrayOverwrittenPrefixBytes = copiedBytes;
+  ArrayHeader* result = AllocArrayInstance(typeInfo, newSize, OBJ_RESULT)->array();
+  kotlin::alloc::tlsArrayOverwrittenPrefixBytes = 0;
+  if (copiedBytes > 0) {
+    memcpy(AddressOfElementAt<KByte>(result, 0),
+           AddressOfElementAt<KByte>(array, 0) + static_cast<size_t>(fromIndex) * elementSize,
+           copiedBytes);
+  }
+  RETURN_OBJ(result->obj());
+}

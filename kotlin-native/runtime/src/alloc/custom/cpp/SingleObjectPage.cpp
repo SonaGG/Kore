@@ -20,7 +20,14 @@ SingleObjectPage* SingleObjectPage::Create(uint64_t cellCount) noexcept {
     CustomAllocInfo("SingleObjectPage::Create(%" PRIu64 ")", cellCount);
     RuntimeAssert(!compiler::pagedAllocator() || cellCount > NextFitPage::maxBlockSize(), "blockSize too small for SingleObjectPage");
     auto objectSize = AllocationSize::cells(cellCount);
-    return new (SafeAlloc(pageSize(objectSize).inBytes())) SingleObjectPage(objectSize);
+    // Kore: the part of the object that its allocator overwrites need not be zeroed (see `tlsSingleObjectPageUnzeroed`).
+    auto unzeroed = tlsSingleObjectPageUnzeroed;
+    tlsSingleObjectPageUnzeroed = {};
+    // The offset of `data_` (computed on an aligned address, without memory accesses).
+    constexpr uintptr_t kProbe = 4096;
+    size_t dataOffset = reinterpret_cast<uintptr_t>(reinterpret_cast<SingleObjectPage*>(kProbe)->Data()) - kProbe;
+    return new (SafeAlloc(pageSize(objectSize).inBytes(), unzeroed.length == 0 ? 0 : dataOffset + unzeroed.from, unzeroed.length))
+            SingleObjectPage(objectSize);
 }
 
 SingleObjectPage::SingleObjectPage(AllocationSize objectSize) noexcept {

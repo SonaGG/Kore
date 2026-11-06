@@ -206,7 +206,13 @@ BlockCache& blockCache() noexcept {
 
 } // namespace
 
+thread_local kotlin::alloc::UnzeroedRange kotlin::alloc::tlsSingleObjectPageUnzeroed;
+
 void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
+    return SafeAlloc(size, 0, 0);
+}
+
+void* kotlin::alloc::SafeAlloc(uint64_t size, size_t unzeroedFrom, size_t unzeroedLength) noexcept {
     void* memory = nullptr;
     if (size >= kCachedBlockMinBytes && size <= std::numeric_limits<size_t>::max()) {
         size_t block = blockSize(static_cast<size_t>(size));
@@ -221,7 +227,15 @@ void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
             }
         }
         if (memory != nullptr) {
-            std::memset(memory, 0, static_cast<size_t>(size));
+            // Reused memory is zeroed here (fresh system memory already is), except for the bytes the caller overwrites.
+            auto bytes = static_cast<size_t>(size);
+            if (unzeroedLength == 0 || unzeroedFrom >= bytes) {
+                std::memset(memory, 0, bytes);
+            } else {
+                size_t unzeroedEnd = std::min(bytes, unzeroedFrom + unzeroedLength);
+                std::memset(memory, 0, unzeroedFrom);
+                std::memset(static_cast<uint8_t*>(memory) + unzeroedEnd, 0, bytes - unzeroedEnd);
+            }
         } else {
             memory = systemAlloc(block);
         }
