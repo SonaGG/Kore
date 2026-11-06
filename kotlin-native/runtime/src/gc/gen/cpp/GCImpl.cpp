@@ -33,6 +33,12 @@
 
 using namespace kotlin;
 
+namespace kotlin::alloc {
+// Kore: debugging counters of the custom allocator's `Heap::ForEachHeapSlot` (zero with the other allocators).
+extern size_t gLastSlowHeapSlots;
+extern size_t gLastHeapRanges;
+} // namespace kotlin::alloc
+
 std::atomic<bool> gc::internal::youngCollection = false;
 std::atomic<size_t> gc::internal::markArraySlicesPending = 0;
 
@@ -211,9 +217,29 @@ struct MarkArraySlice {
 std::atomic<bool> gSliceArraysInMark = false;
 [[clang::no_destroy]] std::mutex gMarkArraySlicesMutex;
 [[clang::no_destroy]] std::vector<MarkArraySlice> gMarkArraySlices;
+// Kore: the remembered holders of the young collection in progress. Their rescan is shared like array slices: a slice
+// with a null array is a range of this vector.
+const std::vector<ObjHeader*>* gRememberedHolders = nullptr;
+constexpr uint32_t kRememberedHoldersPerSlice = 64;
+
+void rescanRememberedHolder(MarkTraits::MarkQueue& markQueue, ObjHeader* holder) noexcept {
+    alloc::objectDataForObject(holder).forget();
+    MarkTraits::processInMark(markQueue, holder);
+    if (auto* extraObjectData = mm::ExtraObjectData::Get(holder)) {
+        if (auto* weakReference = extraObjectData->GetRegularWeakReferenceImpl()) {
+            if (weakReference->heap()) {
+                MarkTraits::tryEnqueue(markQueue, weakReference);
+            }
+        }
+    }
+}
 
 void markArraySlice(void* state, ArrayHeader* array, uint32_t begin, uint32_t end) noexcept {
     auto& markQueue = *static_cast<MarkTraits::MarkQueue*>(state);
+    if (array == nullptr) {
+        for (uint32_t i = begin; i < end; ++i) rescanRememberedHolder(markQueue, (*gRememberedHolders)[i]);
+        return;
+    }
     ObjHeader** slots = ArrayAddressOfElementAt(array, 0);
     bool recordSlots = recordingNurserySlots();
     for (uint32_t i = begin; i < end; ++i) {
@@ -652,16 +678,35 @@ void gc::internal::GenerationalGC::markRememberedSet(
         mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet,
         std::vector<ObjHeader**>& stackCandidates) noexcept {
     // Objects logged by the holder-aware barrier: rescan all their references.
-    for (ObjHeader* holder : rememberedSet.objects) {
-        alloc::objectDataForObject(holder).forget();
-        MarkTraits::processInMark(markQueue, holder);
-        if (auto* extraObjectData = mm::ExtraObjectData::Get(holder)) {
-            if (auto* weakReference = extraObjectData->GetRegularWeakReferenceImpl()) {
-                if (weakReference->heap()) {
-                    MarkTraits::tryEnqueue(markQueue, weakReference);
-                }
+    // Kore: shared with the other mark workers in slices (taken before any other work), as their rescan is most of the
+    // pause otherwise. The objects they find are marked by whoever takes the slice.
+    auto& holders = rememberedSet.objects;
+    if (holders.size() <= kRememberedHoldersPerSlice) {
+        for (ObjHeader* holder : holders) rescanRememberedHolder(markQueue, holder);
+    } else {
+        gRememberedHolders = &holders;
+        {
+            std::unique_lock guard(gMarkArraySlicesMutex);
+            for (size_t begin = 0; begin < holders.size(); begin += kRememberedHoldersPerSlice) {
+                gMarkArraySlices.push_back({nullptr, static_cast<uint32_t>(begin),
+                                            static_cast<uint32_t>(std::min(begin + kRememberedHoldersPerSlice, holders.size()))});
             }
+            gc::internal::markArraySlicesPending.store(gMarkArraySlices.size(), std::memory_order_relaxed);
         }
+        markQueue.notifyExternalWork();
+    }
+    gc::pausePhase("holders");
+    static const bool reportCounts = std::getenv("KORE_GC_PAUSES") != nullptr;
+    if (reportCounts) {
+        size_t holderBytes = 0;
+        size_t largest = 0;
+        for (ObjHeader* holder : rememberedSet.objects) {
+            size_t bytes = holder->type_info()->IsArray() ? holder->array()->count_ * sizeof(ObjHeader*) : holder->type_info()->instanceSize_;
+            holderBytes += bytes;
+            largest = std::max(largest, bytes);
+        }
+        konan::consoleErrorf("[kore-gc] remembered: %zu holders (%zu bytes, largest %zu), %zu slots, %zu stack candidates\n",
+                             rememberedSet.objects.size(), holderBytes, largest, rememberedSet.slots.size(), stackCandidates.size());
     }
     // Slots recorded by the generic barrier: only those inside old objects are roots. Slots in young objects are
     // traced if their object is reachable; stack, global and thread-local slots are part of the root set already.
@@ -689,6 +734,11 @@ void gc::internal::GenerationalGC::markRememberedSet(
         }
         if (recordingNurserySlots()) recordIfMovable(slot);
     });
+    gc::pausePhase("slots");
+    if (reportCounts) {
+        konan::consoleErrorf("[kore-gc] slots: %zu addresses, %zu needed page ranges (%zu ranges)\n", addresses.size(),
+                             alloc::gLastSlowHeapSlots, alloc::gLastHeapRanges);
+    }
     // Kore: slots in old objects of retained nursery blocks, which the allocator does not know.
     if (alloc::nursery::enabled()) {
         for (ObjHeader** slot : rememberedSet.slots) {

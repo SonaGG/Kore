@@ -21,7 +21,7 @@ bool reportPauses() noexcept {
 
 uint64_t gPauseStartMicros = 0;
 const char* gPauseReason = nullptr;
-constexpr int kMaxPausePhases = 8;
+constexpr int kMaxPausePhases = 16;
 const char* gPhaseNames[kMaxPausePhases];
 uint64_t gPhaseEnds[kMaxPausePhases];
 int gPhaseCount = 0;
@@ -47,7 +47,7 @@ void kotlin::gc::resumeTheWorld(kotlin::gc::GCHandle gcHandle) noexcept {
     gcHandle.threadsAreResumed();
     if (reportPauses() && gPauseReason != nullptr) {
         uint64_t end = konan::getTimeMicros();
-        char phases[256];
+        char phases[512];
         size_t length = 0;
         uint64_t previous = gPauseStartMicros;
         for (int i = 0; i < gPhaseCount && length + 40 < sizeof(phases); ++i) {

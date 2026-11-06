@@ -59,8 +59,38 @@ struct PageRange {
 
 } // namespace
 
+// Kore: debugging (`KORE_GC_PAUSES`): the addresses of the last `ForEachHeapSlot` that needed the page ranges.
+size_t gLastSlowHeapSlots = 0;
+size_t gLastHeapRanges = 0;
+
 void Heap::ForEachHeapSlot(
-        const std::vector<ObjHeader**>& sortedSlots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
+        const std::vector<ObjHeader**>& allSlots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
+    if (allSlots.empty()) return;
+    gLastSlowHeapSlots = 0;
+    gLastHeapRanges = 0;
+
+    // Kore: almost every object is in an Immix block, whose object starts give the owner of an address directly. Only
+    // the other addresses need the (sorted) ranges of all the heap's pages.
+    std::vector<std::pair<const uint8_t*, const uint8_t*>> chunks;
+    immixBlocks_.TraverseChunks([&](uint8_t* begin, uint8_t* end) { chunks.emplace_back(begin, end); });
+    std::sort(chunks.begin(), chunks.end());
+    std::vector<ObjHeader**> sortedSlots;
+    auto chunk = chunks.begin();
+    for (ObjHeader** slot : allSlots) {
+        auto* address = reinterpret_cast<const uint8_t*>(slot);
+        while (chunk != chunks.end() && chunk->second <= address) ++chunk;
+        if (chunk == chunks.end() || address < chunk->first) {
+            sortedSlots.push_back(slot);
+            continue;
+        }
+        uint8_t* block = ImmixBlock::Of(address)->StartAtOrBefore(address);
+        if (block == nullptr) continue;
+        auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
+        if (object->typeInfoOrMetaRelaxed() == nullptr) continue;
+        if (address >= block + ObjectSweepTraits::elementSize(block).inBytes()) continue;
+        process(slot, object);
+    }
+    gLastSlowHeapSlots = sortedSlots.size();
     if (sortedSlots.empty()) return;
 
     std::vector<PageRange> ranges;
@@ -76,8 +106,8 @@ void Heap::ForEachHeapSlot(
         auto* data = page->Data();
         ranges.push_back({data, data + ObjectSweepTraits::elementSize(data).inBytes(), PageRange::Kind::kSingleObject, page});
     });
-    immixBlocks_.TraverseChunks([&](uint8_t* begin, uint8_t* end) { ranges.push_back({begin, end, PageRange::Kind::kImmix, nullptr}); });
     std::sort(ranges.begin(), ranges.end(), [](const PageRange& lhs, const PageRange& rhs) { return lhs.begin < rhs.begin; });
+    gLastHeapRanges = ranges.size();
 
     auto range = ranges.begin();
     for (ObjHeader** slot : sortedSlots) {
