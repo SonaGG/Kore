@@ -66,7 +66,10 @@ Use absolute paths: the compiler may run in a Gradle daemon with a different wor
   with the program, so the profile covers its hot paths too (allocation, safepoints, ...). This makes compilation
   slower when the precompiled runtime would have been cached.
 - Instrumented builds are compiled to machine code without splitting into parallel partitions
-  (`codegenPartitions`).
+  (`codegenPartitions`). Builds with `pgoUse` do split. The module pipeline attaches the profile (branch weights,
+  function entry counts and the profile summary) before the module is split, and every partition keeps it. On the
+  game benchmark, `pgoUse` builds with automatic partitions and with `codegenPartitions=1` run equally fast
+  (steady frame mean 4.81 and 4.73 ms, min of 5), and the automatic ones compile faster.
 - Instrumented binaries link LLVM's profile runtime (`clang_rt.profile`). Supported targets: `mingw_x64`. The LLVM
   distribution Kore compiles with does not include compiler-rt; the compiler takes the profile runtime from the LLVM
   development distribution of the same version if it is in `~/.konan/dependencies`. If not, compile the instrumented
