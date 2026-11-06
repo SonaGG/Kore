@@ -60,6 +60,7 @@ public:
         for (size_t block = 0; block < blockCount_; ++block) count += state(block) == blockState;
         return count;
     }
+    uint8_t releaseKind(const void* address) const noexcept { return contains(address) ? releaseKinds_[blockOf(address)] : 0; }
     bool movable(const void* address) const noexcept {
         if (!contains(address)) return false;
         auto blockState = state(blockOf(address));
@@ -74,6 +75,8 @@ public:
     void forEachObject(BlockState blockState, const std::function<void(ObjHeader*)>& process) noexcept;
 
     void retain(const ObjHeader* object) noexcept;
+    // Whether the block of `object` is kept by the young collection in progress.
+    bool retaining(const void* address) const noexcept { return contains(address) && retainFlags_[blockOf(address)]; }
     // Both return the number of blocks they free.
     size_t finishYoungCollection() noexcept;
     size_t releaseEmptyRetainedBlocks(const std::function<bool(ObjHeader*)>& alive) noexcept;
@@ -83,7 +86,7 @@ private:
 
     uint8_t* blockStart(size_t block) const noexcept { return base_ + block * kBlockSize; }
     const std::vector<uint32_t>& objectOffsets(size_t block) noexcept;
-    void release(size_t block) noexcept;
+    void release(size_t block, uint8_t kind) noexcept;
 
     static Nursery* instance_;
 
@@ -95,6 +98,7 @@ private:
     std::unique_ptr<std::atomic<uint64_t>[]> pins_; // One bit per object alignment unit.
     std::vector<std::vector<uint32_t>> offsets_; // Object start offsets per block, built on demand.
     std::vector<bool> offsetsValid_;
+    std::unique_ptr<uint8_t[]> releaseKinds_; // Debugging: how each block was last released (1 young, 2 retained).
     std::atomic<bool> allocationEnabled_ = true;
     std::mutex mutex_;
     std::vector<uint32_t> freeBlocks_;

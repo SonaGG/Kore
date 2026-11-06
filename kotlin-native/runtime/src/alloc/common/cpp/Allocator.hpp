@@ -128,12 +128,15 @@ ObjHeader* movableObjectContaining(uintptr_t address) noexcept;
 void forEachMovableObject(const std::function<void(ObjHeader*)>& process) noexcept;
 // `object` stays in place: its block is retained.
 void retain(const ObjHeader* object) noexcept;
+bool retaining(const void* address) noexcept;
 // Frees the evacuated blocks, retains the others, clears the pins.
 void finishYoungCollection() noexcept;
 
 bool inRetainedBlock(const void* address) noexcept;
 // Debugging: whether `address` is in a free (released) nursery block.
 bool inFreeBlock(const void* address) noexcept;
+int releaseKind(const void* address) noexcept; // Debugging.
+
 size_t activeBlocks() noexcept;
 ObjHeader* retainedObjectContaining(uintptr_t address) noexcept;
 void forEachRetainedObject(const std::function<void(ObjHeader*)>& process) noexcept;

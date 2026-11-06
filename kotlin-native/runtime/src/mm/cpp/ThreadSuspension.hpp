@@ -55,7 +55,9 @@ public:
     ALWAYS_INLINE void saveStackPointer() noexcept { savedStackPointer_.store(currentStackPointer(), std::memory_order_relaxed); }
     // Callee-saved registers when the thread last left the runnable state: they may hold references (without a shadow
     // stack, or in values the compiled code keeps in registers) across the native code that follows.
-    static constexpr size_t kSavedRegisters = 10;
+    // x86-64: 8 general purpose registers and xmm6-xmm15 (callee-saved on Windows: vectorized code may keep references
+    // there); arm64: x19-x28 and d8-d15.
+    static constexpr size_t kSavedRegisters = 28;
     const uintptr_t* savedRegisters() const noexcept { return savedRegisters_; }
     NO_INLINE void captureRegistersAndStackPointer() noexcept;
     ALWAYS_INLINE void saveStateForStackScanning() noexcept {

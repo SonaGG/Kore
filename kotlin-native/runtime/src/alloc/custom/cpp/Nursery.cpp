@@ -63,7 +63,8 @@ alloc::Nursery::Nursery(uint8_t* base, size_t blockCount) noexcept :
     retainFlags_(new bool[blockCount]()),
     pins_(new std::atomic<uint64_t>[blockCount * kBlockSize / kPinGranule / 64]()),
     offsets_(blockCount),
-    offsetsValid_(blockCount, false) {
+    offsetsValid_(blockCount, false),
+    releaseKinds_(new uint8_t[blockCount]()) {
     freeBlocks_.reserve(blockCount);
     for (size_t block = blockCount; block-- > 0;) {
         states_[block].store(BlockState::kFree, std::memory_order_relaxed);
@@ -149,7 +150,8 @@ void alloc::Nursery::retain(const ObjHeader* object) noexcept {
     retainFlags_[blockOf(object)] = true;
 }
 
-void alloc::Nursery::release(size_t block) noexcept {
+void alloc::Nursery::release(size_t block, uint8_t kind) noexcept {
+    releaseKinds_[block] = kind;
     std::memset(blockStart(block), 0, tops_[block]);
     tops_[block] = 0;
     offsetsValid_[block] = false;
@@ -167,7 +169,7 @@ size_t alloc::Nursery::finishYoungCollection() noexcept {
             retainFlags_[block] = false;
             states_[block].store(BlockState::kRetained, std::memory_order_relaxed);
         } else {
-            release(block);
+            release(block, 1);
             ++released;
         }
     }
@@ -187,7 +189,7 @@ size_t alloc::Nursery::releaseEmptyRetainedBlocks(const std::function<bool(ObjHe
             if (alive(objectAt(start + offset))) any = true;
         }
         if (!any) {
-            release(block);
+            release(block, 2);
             ++released;
         }
     }

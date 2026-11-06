@@ -197,7 +197,17 @@ NO_INLINE void kotlin::mm::ThreadSuspensionData::captureRegistersAndStackPointer
             "movq %%r12, 32(%0)\n\t"
             "movq %%r13, 40(%0)\n\t"
             "movq %%r14, 48(%0)\n\t"
-            "movq %%r15, 56(%0)\n\t" ::"a"(savedRegisters_)
+            "movq %%r15, 56(%0)\n\t"
+            "movdqu %%xmm6, 64(%0)\n\t"
+            "movdqu %%xmm7, 80(%0)\n\t"
+            "movdqu %%xmm8, 96(%0)\n\t"
+            "movdqu %%xmm9, 112(%0)\n\t"
+            "movdqu %%xmm10, 128(%0)\n\t"
+            "movdqu %%xmm11, 144(%0)\n\t"
+            "movdqu %%xmm12, 160(%0)\n\t"
+            "movdqu %%xmm13, 176(%0)\n\t"
+            "movdqu %%xmm14, 192(%0)\n\t"
+            "movdqu %%xmm15, 208(%0)\n\t" ::"a"(savedRegisters_)
             : "memory");
 #elif defined(__aarch64__)
     register uintptr_t* registers asm("x9") = savedRegisters_;
@@ -206,7 +216,11 @@ NO_INLINE void kotlin::mm::ThreadSuspensionData::captureRegistersAndStackPointer
             "stp x21, x22, [%0, #16]\n\t"
             "stp x23, x24, [%0, #32]\n\t"
             "stp x25, x26, [%0, #48]\n\t"
-            "stp x27, x28, [%0, #64]\n\t" ::"r"(registers)
+            "stp x27, x28, [%0, #64]\n\t"
+            "stp d8, d9, [%0, #80]\n\t"
+            "stp d10, d11, [%0, #96]\n\t"
+            "stp d12, d13, [%0, #112]\n\t"
+            "stp d14, d15, [%0, #128]\n\t" ::"r"(registers)
             : "memory");
 #endif
     saveStackPointer();

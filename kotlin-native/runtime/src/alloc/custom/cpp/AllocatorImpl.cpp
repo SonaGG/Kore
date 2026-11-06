@@ -223,6 +223,11 @@ void alloc::nursery::retain(const ObjHeader* object) noexcept {
     Nursery::instance()->retain(object);
 }
 
+bool alloc::nursery::retaining(const void* address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery != nullptr && nursery->retaining(address);
+}
+
 void alloc::nursery::finishYoungCollection() noexcept {
     if (auto* nursery = Nursery::instance()) recordReleasedNurseryBlocks(nursery->finishYoungCollection());
 }
@@ -249,6 +254,11 @@ void alloc::nursery::releaseEmptyRetainedBlocks(const std::function<bool(ObjHead
 size_t alloc::nursery::activeBlocks() noexcept {
     auto* nursery = Nursery::instance();
     return nursery == nullptr ? 0 : nursery->countBlocks(Nursery::BlockState::kActive);
+}
+
+int alloc::nursery::releaseKind(const void* address) noexcept {
+    auto* nursery = Nursery::instance();
+    return nursery == nullptr ? 0 : nursery->releaseKind(address);
 }
 
 bool alloc::nursery::inFreeBlock(const void* address) noexcept {
