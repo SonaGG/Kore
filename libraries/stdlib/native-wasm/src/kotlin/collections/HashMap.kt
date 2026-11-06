@@ -91,6 +91,16 @@ public actual class HashMap<K, V> private constructor(
 ) : MutableMap<K, V> {
     private var hashShift: Int = computeShift(hashSize)
 
+    // Kore: keys start out placed by the low bits of their hash codes, so keys with nearby hash codes (such as
+    // sequential Ints) land in nearby slots and lookups walk memory sequentially, and keys in any arithmetic progression
+    // with an odd step get distinct slots. When that gives a long probe sequence (e.g. hash codes differing only in
+    // their high bits), the map switches for good to Fibonacci hashing, which scatters any pattern.
+    // slotOf computes `((hashCode * hashMultiplier) shl hashLeftShift) ushr hashShift`: with a multiplier of 1 and a
+    // left shift equal to [hashShift] that is `hashCode and (hashSize - 1)`; with [MAGIC] and no left shift, the top
+    // bits of the product.
+    private var hashMultiplier: Int = 1
+    private var hashLeftShift: Int = hashShift
+
     // Kore: the hash code of the key at each index, compared before the keys themselves (as JVM and other hash tables
     // do): a probe of another key then does not touch that key, and rehashing does not call hashCode again.
     private var keyHashes: IntArray = IntArray(keysArray.size)
@@ -338,7 +348,16 @@ public actual class HashMap<K, V> private constructor(
 
     // Null-check for escaping extra boxing for non-nullable keys.
     private fun hashCodeOf(key: K): Int = if (key == null) 0 else key.hashCode()
-    private fun slotOf(hashCode: Int): Int = (hashCode * MAGIC) ushr hashShift
+    private fun slotOf(hashCode: Int): Int =
+        ((hashCode * hashMultiplier) shl hashLeftShift) ushr hashShift
+
+    private val isLowBitsHashing: Boolean get() = hashMultiplier == 1
+
+    private fun switchToFibonacciHashing() {
+        hashMultiplier = MAGIC
+        hashLeftShift = 0
+        maxProbeDistance = INITIAL_MAX_PROBE_DISTANCE
+    }
 
     private fun compact(updateHashArray: Boolean) {
         var i = 0
@@ -369,30 +388,32 @@ public actual class HashMap<K, V> private constructor(
 
         registerModification()
         if (length > _size) compact(updateHashArray = false)
-        hashArray = IntArray(newHashSize)
         hashShift = computeShift(newHashSize)
-
-        var i = 0
-        while (i < length) {
-            if (!putRehash(i++)) {
-                throw IllegalStateException(
-                    "This cannot happen with fixed magic multiplier and grow-only hash array. Have object hashCodes changed?"
-                )
+        if (isLowBitsHashing) hashLeftShift = hashShift
+        while (true) {
+            hashArray = IntArray(newHashSize)
+            var i = 0
+            while (i < length) {
+                putRehash(i++)
             }
+            if (!isLowBitsHashing || maxProbeDistance <= MAX_LOW_BITS_PROBE_DISTANCE) return
+            switchToFibonacciHashing()
         }
     }
 
-    private fun putRehash(i: Int): Boolean {
+    // There always is a free slot: the hash array is larger than the capacity. Raises maxProbeDistance as needed.
+    private fun putRehash(i: Int) {
         var hash = slotOf(keyHashes[i])
-        var probesLeft = maxProbeDistance
+        var probeDistance = 0
         while (true) {
             val index = hashArray[hash]
             if (index == 0) {
                 hashArray[hash] = i + 1
                 presenceArray[i] = hash
-                return true
+                if (probeDistance > maxProbeDistance) maxProbeDistance = probeDistance
+                return
             }
-            if (--probesLeft < 0) return false
+            probeDistance++
             if (hash-- == 0) hash = hashSize - 1
         }
     }
@@ -425,7 +446,9 @@ public actual class HashMap<K, V> private constructor(
         retry@ while (true) {
             var hash = slotOf(hashCode)
             // put is allowed to grow maxProbeDistance with some limits (resize hash on reaching limits)
-            val tentativeMaxProbeDistance = (maxProbeDistance * 2).coerceAtMost(hashSize / 2)
+            var tentativeMaxProbeDistance = (maxProbeDistance * 2).coerceAtMost(hashSize / 2)
+            if (isLowBitsHashing && tentativeMaxProbeDistance > MAX_LOW_BITS_PROBE_DISTANCE)
+                tentativeMaxProbeDistance = MAX_LOW_BITS_PROBE_DISTANCE
             var probeDistance = 0
             while (true) {
                 val index = hashArray[hash]
@@ -448,7 +471,13 @@ public actual class HashMap<K, V> private constructor(
                     return -index
                 }
                 if (++probeDistance > tentativeMaxProbeDistance) {
-                    rehash(hashSize * 2) // cannot find room even with extra "tentativeMaxProbeDistance" -- grow hash
+                    if (isLowBitsHashing) {
+                        // the hash codes are clustered: scatter them over the same hash array
+                        switchToFibonacciHashing()
+                        rehash(hashSize)
+                    } else {
+                        rehash(hashSize * 2) // cannot find room even with extra "tentativeMaxProbeDistance" -- grow hash
+                    }
                     continue@retry
                 }
                 if (hash-- == 0) hash = hashSize - 1
@@ -604,6 +633,7 @@ public actual class HashMap<K, V> private constructor(
         private const val MAGIC = -1640531527 // 2654435769L.toInt(), golden ratio
         private const val INITIAL_CAPACITY = 8
         private const val INITIAL_MAX_PROBE_DISTANCE = 2
+        private const val MAX_LOW_BITS_PROBE_DISTANCE = 8
         private const val TOMBSTONE = -1
 
         private fun computeHashSize(capacity: Int): Int = (capacity.coerceAtLeast(1) * 3).takeHighestOneBit()
