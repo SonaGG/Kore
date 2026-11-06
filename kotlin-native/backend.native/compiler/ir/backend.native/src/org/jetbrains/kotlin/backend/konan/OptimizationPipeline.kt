@@ -416,6 +416,9 @@ class LTOOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: Pe
                     add("globaldce")
                 }
 
+                // Kore: inductive range check elimination first: it splits loops with array bounds checks into a main loop
+                // without them (which the LTO pipeline can then vectorize) and guarded pre- and post-loops.
+                add("function(irce)")
                 // Pipeline that is similar to `llvm-lto`.
                 add("lto<$optimizationFlag>")
             }
@@ -432,7 +435,7 @@ class LTOPreSplitPipeline(private val config: LlvmPipelineConfig, performanceMan
     }
 
     // The pipeline each partition runs.
-    val partitionPasses: String get() = config.ltoPasses ?: "lto<$optimizationFlag>"
+    val partitionPasses: String get() = config.ltoPasses ?: "function(irce),lto<$optimizationFlag>"
 }
 
 class ThreadSanitizerPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
