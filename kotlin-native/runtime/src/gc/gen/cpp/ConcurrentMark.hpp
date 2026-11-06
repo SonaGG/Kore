@@ -89,8 +89,9 @@ public:
                     RuntimeLogDebug({logging::Tag::kGCMark}, "Dequeued %p", object);
                     return object;
                 }
-                // Null: the mark is done, or there are slices to take.
-                if (__builtin_expect(!arraySlicesPending(), true)) return nullptr;
+                // Null: the mark is done, or there were slices to take (possibly taken by other workers since: then
+                // look for work again, as returning would leave the processor waiting for this worker).
+                if (queue.terminated()) return nullptr;
             }
         }
 

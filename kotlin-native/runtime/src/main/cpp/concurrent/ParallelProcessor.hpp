@@ -174,6 +174,9 @@ public:
             RuntimeLogDebug({ kTagBalancing }, "Worker registered");
         }
 
+        // Kore: whether `tryPop` returned null because the processing terminated (not because of external work).
+        bool terminated() const noexcept { return terminated_; }
+
         PERFORMANCE_INLINE typename ListImpl::pointer tryPop() noexcept {
             if (this->batch_.empty()) {
                 while (true) {
@@ -187,6 +190,7 @@ public:
                             if (this->dispatcher_.externalWorkPending()) return nullptr;
                             bool newWorkAvailable = waitForMoreWork();
                             if (newWorkAvailable) continue;
+                            terminated_ = true;
                             return nullptr;
                         }
                     }
@@ -263,6 +267,8 @@ public:
 
             return true;
         }
+
+        bool terminated_ = false;
     };
 
     ParallelProcessor() = default;
