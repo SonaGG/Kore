@@ -404,7 +404,7 @@ public actual class HashMap<K, V> private constructor(
         while (true) {
             val index = hashArray[hash]
             if (index == 0) return TOMBSTONE
-            if (keyHashes[index - 1] == hashCode && keysArray[index - 1] == key) return index - 1
+            if (keyHashes[index - 1] == hashCode && key == keysArray[index - 1]) return index - 1
             if (--probesLeft < 0) return TOMBSTONE
             if (hash-- == 0) hash = hashSize - 1
         }
@@ -444,7 +444,7 @@ public actual class HashMap<K, V> private constructor(
                     if (probeDistance > maxProbeDistance) maxProbeDistance = probeDistance
                     return putIndex
                 }
-                if (keyHashes[index - 1] == hashCode && keysArray[index - 1] == key) {
+                if (keyHashes[index - 1] == hashCode && key == keysArray[index - 1]) {
                     return -index
                 }
                 if (++probeDistance > tentativeMaxProbeDistance) {
