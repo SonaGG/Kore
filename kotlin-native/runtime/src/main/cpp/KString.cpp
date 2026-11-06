@@ -397,14 +397,8 @@ extern "C" KInt Kotlin_StringBuilder_insertString(KRef builder, KInt distIndex, 
 extern "C" KInt Kotlin_StringBuilder_insertInt(KRef builder, KInt position, KInt value) {
     auto toArray = builder->array();
     RuntimeAssert(toArray->count_ >= static_cast<uint32_t>(11 + position), "must be true");
-    char cstring[21];
-    kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-    auto* from = &cstring[0];
-    auto* to = CharArrayAddressOfElementAt(toArray, position);
-    while (*from) {
-        *to++ = static_cast<KChar>(*from++); // always ASCII
-    }
-    return from - cstring;
+    // Kore: digits straight into the builder's array (always ASCII).
+    return static_cast<KInt>(kotlin::formatDecimalTo(value, CharArrayAddressOfElementAt(toArray, position)));
 }
 
 static std::optional<KInt> Kotlin_String_cachedHashCode(KConstRef thiz) {
