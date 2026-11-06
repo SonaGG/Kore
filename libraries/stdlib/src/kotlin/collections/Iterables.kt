@@ -36,7 +36,16 @@ internal fun <T> Iterable<T>.collectionSizeOrNull(): Int? = if (this is Collecti
  * Returns the size of this iterable if it is known, or the specified [default] value otherwise.
  */
 @PublishedApi
-internal fun <T> Iterable<T>.collectionSizeOrDefault(default: Int): Int = if (this is Collection<*>) this.size else default
+internal fun <T> Iterable<T>.collectionSizeOrDefault(default: Int): Int = when (this) {
+    is Collection<*> -> this.size
+    // Kore: the size of an integer progression is known too (e.g. `(0 until n).map { ... }` then allocates its list
+    // once instead of growing it from `default`), capped so that a transformation that stops early does not allocate
+    // a huge list.
+    is IntProgression -> if (isEmpty()) 0 else minOf((last.toLong() - first) / step + 1, PROGRESSION_SIZE_HINT_LIMIT).toInt()
+    else -> default
+}
+
+private const val PROGRESSION_SIZE_HINT_LIMIT = 1L shl 20
 
 
 /**
