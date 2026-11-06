@@ -74,6 +74,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: store the fields of small immutable classes inline in the objects holding them (default: true).
     val valueFlattening by booleanOption()
 
+    // Kore: stream local collection pipelines (map/filter/sum...) without building the intermediate lists (default: true).
+    val collectionFusion by booleanOption()
+
     // Kore: load type infos and their virtual and interface tables as invariant, so lookups are hoisted and shared.
     val invariantTypeInfo by booleanOption()
 

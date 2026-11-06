@@ -269,6 +269,10 @@ class NativeSecondStageCompilationConfig(
     val valueFlattening: Boolean
         get() = configuration.get(BinaryOptions.valueFlattening) ?: true
 
+    // Kore: see [org.jetbrains.kotlin.backend.konan.optimizations.CollectionFusion]. Needs the whole program.
+    val collectionFusion: Boolean
+        get() = configuration.get(BinaryOptions.collectionFusion) ?: true
+
     // Kore: see [BinaryOptions.invariantTypeInfo].
     val invariantTypeInfo: Boolean
         get() = configuration.get(BinaryOptions.invariantTypeInfo) ?: true

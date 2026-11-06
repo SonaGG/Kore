@@ -523,6 +523,9 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(InlineClassPropertyAccessorsPhase, it, disable = !optimize)
     }
     if (runGlobalOptimizations) {
+        // Kore: fuses local collection pipelines before the DFG is built, so the analyses see the simplified loops.
+        if (context.config.collectionFusion && context.config.produce == CompilerOutputKind.PROGRAM)
+            org.jetbrains.kotlin.backend.konan.optimizations.CollectionFusion(context.context, module).run()
         // Kore: before the devirtualization analysis, which then resolves the calls this pass guards.
         org.jetbrains.kotlin.backend.konan.optimizations.GenericSpecialization(context.context, module).run()
         // Kore: before the DFG is built, so the pre-codegen inliner and escape analysis see the flattened fields.
