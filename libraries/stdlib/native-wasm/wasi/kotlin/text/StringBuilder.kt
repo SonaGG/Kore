@@ -734,9 +734,16 @@ private constructor (private var array: CharArray) : CharSequence, Appendable {
         if (minCapacity > array.size || minCapacity < 0) grow(minCapacity)
     }
 
+    // Kore: grows like Java's `StringBuilder` (twice the capacity plus 2) rather than by half, which copies a third less
+    // while a string is built.
     private fun grow(minCapacity: Int) {
         if (minCapacity < 0) throw OutOfMemoryError()    // overflow
-        val newSize = AbstractList.newCapacity(array.size, minCapacity)
+        val doubled = array.size.toLong() * 2 + 2
+        val newSize = when {
+            doubled < minCapacity -> minCapacity
+            doubled > MAX_CAPACITY -> if (minCapacity > MAX_CAPACITY) Int.MAX_VALUE else MAX_CAPACITY
+            else -> doubled.toInt()
+        }
         array = array.copyOf(newSize)
     }
 
@@ -998,3 +1005,6 @@ public inline fun StringBuilder.deleteCharAt(index: Int): StringBuilder = this.d
 internal expect fun unsafeStringFromCharArray(array: CharArray, start: Int, size: Int): String
 internal expect fun insertInt(array: CharArray, start: Int, value: Int): Int
 internal expect fun insertString(array: CharArray, destinationIndex: Int, value: String, sourceIndex: Int, count: Int): Int
+
+// Kore: the largest capacity `StringBuilder` grows to by itself (as `AbstractList.newCapacity`).
+private const val MAX_CAPACITY = Int.MAX_VALUE - 8
