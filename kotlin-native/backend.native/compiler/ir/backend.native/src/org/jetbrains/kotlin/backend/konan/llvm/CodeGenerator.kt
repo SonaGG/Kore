@@ -1300,11 +1300,13 @@ internal abstract class FunctionGenerationContext(
 
     fun loadTypeInfo(objPtr: LLVMValueRef): LLVMValueRef {
         if (!context.config.invariantTypeInfo) return call(llvm.getTypeInfo, listOf(objPtr))
-        // Kore: inline `ObjHeader::type_info()` with invariant loads, so LLVM may hoist and share them (and the table
-        // lookups based on them) across calls and stores. A header only ever changes from the type info to a meta
-        // object whose first field is the same type info, so every value the loads can see yields the same result.
-        // Unordered (instead of relaxed) atomicity keeps the racy read defined while still allowing hoisting.
-        val header = loadInvariant(llvm.pointerType, objPtr, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
+        // Kore: inline `ObjHeader::type_info()`, so LLVM may hoist and share the loads (and the table lookups based on
+        // them). The header itself is not loaded as invariant: objects on the stack get their header stored by the
+        // function itself (and one alloca may hold objects of different classes), so an invariant load could be moved
+        // above that store. What it points to (a type info, or a meta object whose first field is the same type info)
+        // never changes. Unordered (instead of relaxed) atomicity keeps the racy read defined while allowing hoisting.
+        val header = load(llvm.pointerType, objPtr, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingUnordered,
+                alignment = LLVMABIAlignmentOfType(codegen.llvmTargetData, llvm.pointerType))
         val untagged = intToPtr(and(ptrToInt(header, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)
         return loadInvariant(llvm.pointerType, untagged, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
     }
