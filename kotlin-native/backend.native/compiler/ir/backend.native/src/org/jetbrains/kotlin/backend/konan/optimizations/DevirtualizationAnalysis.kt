@@ -86,7 +86,13 @@ internal object DevirtualizationAnalysis {
         val globalInitializers = moduleDFG.symbolTable.functionMap.values.filter {
             it.isStaticFieldInitializer || it.isEagerStaticInitializer
         }
-        val explicitlyExported = moduleDFG.symbolTable.functionMap.values.filter { it.explicitlyExported }
+        // Kore: without Objective-C interop, the runtime never calls the functions creating the Kotlin wrappers of Objective-C
+        // collections (their callers are compiled only with `KONAN_OBJC_INTEROP`). As roots, they made every `List`, `Set`,
+        // `Map` and `Iterator` call site in the program consider the wrappers as possible receivers.
+        val objCInterop = context.config.target.family.isAppleFamily
+        val explicitlyExported = moduleDFG.symbolTable.functionMap.values.filter {
+            it.explicitlyExported && (objCInterop || !it.isObjCCollectionWrapperFactory())
+        }
 
         // Conservatively assume each associated object could be called.
         // Note: for constructors there is additional parameter (<this>) and its type will be added
@@ -1927,4 +1933,16 @@ private fun compareLexicographically(weights1: IntArray, indices1: IntArray, wei
     for (i in weights1.indices) if (weights1[i] != weights2[i]) return weights1[i].compareTo(weights2[i])
     for (i in indices1.indices) if (indices1[i] != indices2[i]) return indices1[i].compareTo(indices2[i])
     return 0
+}
+
+// Kore: see the root set in [DevirtualizationAnalysis.computeRootSet].
+private val objCCollectionWrapperFactories = setOf(
+        "Kotlin_NSArrayAsKList_create", "Kotlin_NSMutableArrayAsKMutableList_create", "Kotlin_NSEnumeratorAsKIterator_create",
+        "Kotlin_NSSetAsKSet_create", "Kotlin_NSDictionaryAsKMap_create",
+)
+
+private fun DataFlowIR.FunctionSymbol.isObjCCollectionWrapperFactory(): Boolean {
+    val function = irFunction ?: return false
+    return function.name.asString() in objCCollectionWrapperFactories &&
+            (function.parent as? org.jetbrains.kotlin.ir.declarations.IrFile)?.packageFqName?.asString() == "kotlin.native.internal"
 }
