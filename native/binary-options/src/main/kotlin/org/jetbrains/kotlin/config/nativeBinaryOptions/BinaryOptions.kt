@@ -71,6 +71,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: type-based alias analysis metadata on field accesses.
     val tbaa by booleanOption()
 
+    // Kore: store the fields of small immutable classes inline in the objects holding them (default: true).
+    val valueFlattening by booleanOption()
+
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 

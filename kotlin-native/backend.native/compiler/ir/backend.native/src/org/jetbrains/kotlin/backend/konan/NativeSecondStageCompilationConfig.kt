@@ -265,6 +265,10 @@ class NativeSecondStageCompilationConfig(
     val tbaa: Boolean
         get() = configuration.get(BinaryOptions.tbaa) ?: true
 
+    // Kore: see [org.jetbrains.kotlin.backend.konan.optimizations.ValueFlattening]. Needs the whole program.
+    val valueFlattening: Boolean
+        get() = configuration.get(BinaryOptions.valueFlattening) ?: true
+
     // Kore: 0 means automatic.
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u

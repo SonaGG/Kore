@@ -473,6 +473,12 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
         return (superFields + sortedDeclaredFields).also { fields = it }
     }
 
+    // Kore: for the fields that [org.jetbrains.kotlin.backend.konan.optimizations.ValueFlattening] replaces.
+    @Synchronized
+    fun invalidateFields() {
+        fields = null
+    }
+
     val associatedObjects by lazy {
         val result = mutableMapOf<IrClass, IrClass>()
 

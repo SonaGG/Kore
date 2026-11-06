@@ -525,6 +525,10 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     if (runGlobalOptimizations) {
         // Kore: before the devirtualization analysis, which then resolves the calls this pass guards.
         org.jetbrains.kotlin.backend.konan.optimizations.GenericSpecialization(context.context, module).run()
+        // Kore: before the DFG is built, so the pre-codegen inliner and escape analysis see the flattened fields.
+        // Only executables: the program is all the code that can see the objects.
+        if (context.config.valueFlattening && context.config.produce == CompilerOutputKind.PROGRAM)
+            org.jetbrains.kotlin.backend.konan.optimizations.ValueFlattening(context.context, module).run()
     }
     var moduleDFG = runAndMeasurePhase(BuildDFGPhase, module, disable = !runGlobalOptimizations)
     runAndMeasurePhase(RemoveRedundantCallsToStaticInitializersPhase, RedundantCallsInput(moduleDFG, module), disable = !enablePreCodegenInliner)
