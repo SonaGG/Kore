@@ -35,6 +35,11 @@ internal actual fun <E> Array<E>.resetAt(index: Int) {
     (@Suppress("UNCHECKED_CAST")(this as Array<Any?>))[index] = null
 }
 
+// Kore: `contentEquals` of two arrays of the same integral primitive type and size.
+@GCUnsafeCall("Kotlin_Arrays_primitiveContentEquals")
+@Escapes.Nothing
+internal external fun primitiveArrayContentEquals(array: Any, other: Any): Boolean
+
 @GCUnsafeCall("Kotlin_Array_fillImpl")
 @PointsTo(0x03000, 0x00000, 0x00000, 0x00000, 0x00000) // array.intestines -> value
 internal external fun <T> arrayFill(array: Array<T>, fromIndex: Int, toIndex: Int, value: T)

@@ -29,6 +29,7 @@
 #include "Memory.h"
 #include "Natives.h"
 #include "KString.h"
+#include "MemorySearch.hpp"
 #include "Porting.h"
 #include "Types.h"
 
@@ -360,8 +361,12 @@ extern "C" KInt Kotlin_String_compareTo(KConstRef thiz, KConstRef other) {
         auto begin1 = thiz.begin(), end1 = thiz.end();
         auto begin2 = other.begin(), end2 = other.end();
         if constexpr (thiz.encoding == other.encoding) {
-            auto [ptr1, ptr2] = std::mismatch(begin1.ptr(), end1.ptr(), begin2.ptr(), end2.ptr());
-            return Kotlin_String_compareAt(thiz.at(ptr1), end1, other.at(ptr2), end2);
+            // Kore: find the first differing unit a vector at a time.
+            auto ptr1 = begin1.ptr(), ptr2 = begin2.ptr();
+            constexpr size_t unitSize = sizeof(*ptr1);
+            size_t common = std::min(thiz.sizeInUnits(), other.sizeInUnits());
+            size_t mismatch = firstMismatchByte(ptr1, ptr2, common * unitSize) / unitSize;
+            return Kotlin_String_compareAt(thiz.at(ptr1 + mismatch), end1, other.at(ptr2 + mismatch), end2);
         } else {
             auto [it1, it2] = std::mismatch(begin1, end1, begin2, end2);
             return Kotlin_String_compareAt(it1, end1, it2, end2);
@@ -423,7 +428,10 @@ extern "C" KBoolean Kotlin_String_equals(KConstRef thiz, KConstRef other) {
 
     return encodingAware(thiz, other, [=](auto thiz, auto other) {
         if constexpr (thiz.encoding == other.encoding) {
-            return std::equal(thiz.begin().ptr(), thiz.end().ptr(), other.begin().ptr(), other.end().ptr());
+            // Kore: compare a vector at a time.
+            size_t size = thiz.sizeInUnits() * sizeof(*thiz.begin().ptr());
+            return thiz.sizeInUnits() == other.sizeInUnits() &&
+                    firstMismatchByte(thiz.begin().ptr(), other.begin().ptr(), size) == size;
         } else {
             return std::equal(thiz.begin(), thiz.end(), other.begin(), other.end());
         }
@@ -472,11 +480,12 @@ extern "C" KBoolean Kotlin_Char_isLowSurrogate(KChar ch) {
 extern "C" KInt Kotlin_String_indexOfChar(KConstRef thiz, KChar ch, KInt fromIndex) {
     auto unsignedIndex = fromIndex < 0 ? 0 : static_cast<size_t>(fromIndex);
     return encodingAware(thiz, [=](auto thiz) {
-        auto i = std::min(unsignedIndex, thiz.sizeInChars());
-        for (auto it = thiz.begin() + i; i < thiz.sizeInChars(); ++i) {
-            if (*it++ == ch) return static_cast<KInt>(i);
-        }
-        return -1;
+        // Kore: search a vector at a time; both encodings have one unit per char.
+        using Unit = typename decltype(thiz)::unit;
+        if (!decltype(thiz)::canEncode(ch)) return -1;
+        size_t size = thiz.sizeInUnits();
+        size_t found = findUnit<Unit>(thiz.begin().ptr(), std::min(unsignedIndex, size), size, static_cast<Unit>(ch));
+        return found == size ? -1 : static_cast<KInt>(found);
     });
 }
 

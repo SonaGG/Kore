@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "KAssert.h"
+#include "MemorySearch.hpp"
 #include "Exceptions.h"
 #include "Memory.h"
 #include "Natives.h"
@@ -80,6 +81,24 @@ inline void fillImpl(KRef thiz, KInt fromIndex, KInt toIndex, T value) {
     for (int64_t index = start; index < end; ++index) {
       *address++ = value;
     }
+  }
+}
+
+// Kore: compares the contents of two arrays of the same integral primitive type and size bytewise, polling between
+// chunks like `copyInChunks`.
+template <typename T>
+inline bool contentEqualsImpl(const ArrayHeader* thiz, const ArrayHeader* other) {
+  const T* x = PrimitiveArrayAddressOfElementAt<T>(thiz, 0);
+  const T* y = PrimitiveArrayAddressOfElementAt<T>(other, 0);
+  size_t left = static_cast<size_t>(thiz->count_) * sizeof(T);
+  for (size_t done = 0;;) {
+    size_t n = std::min(kCopyChunkBytes, left);
+    if (kotlin::firstMismatchByte(reinterpret_cast<const uint8_t*>(x) + done, reinterpret_cast<const uint8_t*>(y) + done, n) != n)
+      return false;
+    done += n;
+    left -= n;
+    if (left == 0) return true;
+    Kotlin_mm_safePointWhileLoopBody();
   }
 }
 
@@ -153,6 +172,20 @@ extern "C" {
 
 // Generated as part of Kotlin standard library.
 extern const ObjHeader theEmptyArray;
+
+// Kore: `contentEquals` of two arrays of the same integral primitive type and size.
+KBoolean Kotlin_Arrays_primitiveContentEquals(KConstRef thiz, KConstRef other) {
+  const ArrayHeader* a = thiz->array();
+  const ArrayHeader* b = other->array();
+  RuntimeAssert(a->count_ == b->count_ && thiz->type_info() == other->type_info(), "Arrays must be of the same type and size");
+  switch (-thiz->type_info()->instanceSize_) {
+    case 1: return contentEqualsImpl<KByte>(a, b);
+    case 2: return contentEqualsImpl<KShort>(a, b);
+    case 4: return contentEqualsImpl<KInt>(a, b);
+    case 8: return contentEqualsImpl<KLong>(a, b);
+  }
+  RuntimeFail("Unexpected element size %d", -thiz->type_info()->instanceSize_);
+}
 
 // TODO: those must be compiler intrinsics afterwards.
 

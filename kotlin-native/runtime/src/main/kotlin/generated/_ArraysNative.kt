@@ -458,10 +458,8 @@ public actual infix fun ByteArray?.contentEquals(other: ByteArray?): Boolean {
     if (this === other) return true
     if (this === null || other === null) return false
     if (size != other.size) return false
-    for (i in indices) {
-        if (this[i] != other[i]) return false
-    }
-    return true
+    // Kore: compare a vector at a time in the runtime.
+    return primitiveArrayContentEquals(this, other)
 }
 
 /**
@@ -481,10 +479,8 @@ public actual infix fun ShortArray?.contentEquals(other: ShortArray?): Boolean {
     if (this === other) return true
     if (this === null || other === null) return false
     if (size != other.size) return false
-    for (i in indices) {
-        if (this[i] != other[i]) return false
-    }
-    return true
+    // Kore: compare a vector at a time in the runtime.
+    return primitiveArrayContentEquals(this, other)
 }
 
 /**
@@ -504,10 +500,8 @@ public actual infix fun IntArray?.contentEquals(other: IntArray?): Boolean {
     if (this === other) return true
     if (this === null || other === null) return false
     if (size != other.size) return false
-    for (i in indices) {
-        if (this[i] != other[i]) return false
-    }
-    return true
+    // Kore: compare a vector at a time in the runtime.
+    return primitiveArrayContentEquals(this, other)
 }
 
 /**
@@ -527,10 +521,8 @@ public actual infix fun LongArray?.contentEquals(other: LongArray?): Boolean {
     if (this === other) return true
     if (this === null || other === null) return false
     if (size != other.size) return false
-    for (i in indices) {
-        if (this[i] != other[i]) return false
-    }
-    return true
+    // Kore: compare a vector at a time in the runtime.
+    return primitiveArrayContentEquals(this, other)
 }
 
 /**
@@ -623,10 +615,8 @@ public actual infix fun CharArray?.contentEquals(other: CharArray?): Boolean {
     if (this === other) return true
     if (this === null || other === null) return false
     if (size != other.size) return false
-    for (i in indices) {
-        if (this[i] != other[i]) return false
-    }
-    return true
+    // Kore: compare a vector at a time in the runtime.
+    return primitiveArrayContentEquals(this, other)
 }
 
 /**
@@ -648,8 +638,18 @@ public actual fun <T> Array<out T>?.contentHashCode(): Int {
 public actual fun ByteArray?.contentHashCode(): Int {
     if (this === null) return 0
     var result = 1
-    for (element in this)
-        result = 31 * result + element.hashCode()
+    // Kore: four elements per step (31^4 = 923521), so the multiplications do not form one long dependency chain.
+    var i = 0
+    val n = size
+    while (i + 4 <= n) {
+        result = 923521 * result + 29791 * this[i].hashCode() + 961 * this[i + 1].hashCode() +
+                31 * this[i + 2].hashCode() + this[i + 3].hashCode()
+        i += 4
+    }
+    while (i < n) {
+        result = 31 * result + this[i].hashCode()
+        i++
+    }
     return result
 }
 
@@ -660,8 +660,18 @@ public actual fun ByteArray?.contentHashCode(): Int {
 public actual fun ShortArray?.contentHashCode(): Int {
     if (this === null) return 0
     var result = 1
-    for (element in this)
-        result = 31 * result + element.hashCode()
+    // Kore: four elements per step (31^4 = 923521), so the multiplications do not form one long dependency chain.
+    var i = 0
+    val n = size
+    while (i + 4 <= n) {
+        result = 923521 * result + 29791 * this[i].hashCode() + 961 * this[i + 1].hashCode() +
+                31 * this[i + 2].hashCode() + this[i + 3].hashCode()
+        i += 4
+    }
+    while (i < n) {
+        result = 31 * result + this[i].hashCode()
+        i++
+    }
     return result
 }
 
@@ -672,8 +682,18 @@ public actual fun ShortArray?.contentHashCode(): Int {
 public actual fun IntArray?.contentHashCode(): Int {
     if (this === null) return 0
     var result = 1
-    for (element in this)
-        result = 31 * result + element.hashCode()
+    // Kore: four elements per step (31^4 = 923521), so the multiplications do not form one long dependency chain.
+    var i = 0
+    val n = size
+    while (i + 4 <= n) {
+        result = 923521 * result + 29791 * this[i].hashCode() + 961 * this[i + 1].hashCode() +
+                31 * this[i + 2].hashCode() + this[i + 3].hashCode()
+        i += 4
+    }
+    while (i < n) {
+        result = 31 * result + this[i].hashCode()
+        i++
+    }
     return result
 }
 
@@ -684,8 +704,18 @@ public actual fun IntArray?.contentHashCode(): Int {
 public actual fun LongArray?.contentHashCode(): Int {
     if (this === null) return 0
     var result = 1
-    for (element in this)
-        result = 31 * result + element.hashCode()
+    // Kore: four elements per step (31^4 = 923521), so the multiplications do not form one long dependency chain.
+    var i = 0
+    val n = size
+    while (i + 4 <= n) {
+        result = 923521 * result + 29791 * this[i].hashCode() + 961 * this[i + 1].hashCode() +
+                31 * this[i + 2].hashCode() + this[i + 3].hashCode()
+        i += 4
+    }
+    while (i < n) {
+        result = 31 * result + this[i].hashCode()
+        i++
+    }
     return result
 }
 
@@ -732,8 +762,18 @@ public actual fun BooleanArray?.contentHashCode(): Int {
 public actual fun CharArray?.contentHashCode(): Int {
     if (this === null) return 0
     var result = 1
-    for (element in this)
-        result = 31 * result + element.hashCode()
+    // Kore: four elements per step (31^4 = 923521), so the multiplications do not form one long dependency chain.
+    var i = 0
+    val n = size
+    while (i + 4 <= n) {
+        result = 923521 * result + 29791 * this[i].hashCode() + 961 * this[i + 1].hashCode() +
+                31 * this[i + 2].hashCode() + this[i + 3].hashCode()
+        i += 4
+    }
+    while (i < n) {
+        result = 31 * result + this[i].hashCode()
+        i++
+    }
     return result
 }
 
