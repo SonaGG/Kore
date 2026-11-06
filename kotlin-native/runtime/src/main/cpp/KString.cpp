@@ -375,7 +375,15 @@ extern "C" KInt Kotlin_String_compareTo(KConstRef thiz, KConstRef other) {
 }
 
 extern "C" KChar Kotlin_String_get(KConstRef thiz, KInt index) {
-    return encodingAware(thiz, [=](auto thiz) { return *boundsCheckedIteratorAt(thiz, index); });
+    // Kore: written out without `StringHeader::of`'s assertion, so that it is small enough to stay inlinable into compiled
+    // code (see `PrecompiledRuntime`). Both encodings have one unit per char.
+    auto header = reinterpret_cast<const StringHeader*>(thiz);
+    if (header->encoding() == StringEncoding::kLatin1) {
+        if (static_cast<uint32_t>(index) >= header->size()) ThrowArrayIndexOutOfBoundsException();
+        return static_cast<KChar>(reinterpret_cast<const uint8_t*>(header->data())[index]);
+    }
+    if (static_cast<uint32_t>(index) >= header->size() / sizeof(KChar)) ThrowArrayIndexOutOfBoundsException();
+    return reinterpret_cast<const KChar*>(header->data())[index];
 }
 
 extern "C" OBJ_GETTER(Kotlin_ByteArray_unsafeStringFromUtf8OrThrow, KConstRef thiz, KInt start, KInt size) {
