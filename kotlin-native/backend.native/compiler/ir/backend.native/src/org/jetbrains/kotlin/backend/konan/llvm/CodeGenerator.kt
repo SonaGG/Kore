@@ -254,7 +254,11 @@ internal object VirtualTablesLookup {
         call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
     } else {
         val dstHierarchyInfo = context.getLayoutBuilder(dstClass).hierarchyInfo
-        if (!dstClass.isInterface) {
+        if (!dstClass.isInterface && dstHierarchyInfo.classIdLo == dstHierarchyInfo.classIdHi) {
+            // Kore: a class without subclasses in the program: the type info itself, without loading its class id
+            // (one dependent load less, and `when` chains of such checks become compares rather than a jump table).
+            icmpEq(objTypeInfo, codegen.typeInfoValue(dstClass))
+        } else if (!dstClass.isInterface) {
             call(llvm.isSubclassFastFunction,
                     listOf(objTypeInfo, llvm.int32(dstHierarchyInfo.classIdLo), llvm.int32(dstHierarchyInfo.classIdHi)))
         } else {
