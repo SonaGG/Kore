@@ -328,7 +328,11 @@ public actual class HashMap<K, V> private constructor(
     private fun ensureCapacity(minCapacity: Int) {
         if (minCapacity < 0) throw OutOfMemoryError()    // overflow
         if (minCapacity > this.capacity) {
-            val newSize = AbstractList.newCapacity(this.capacity, minCapacity)
+            // Kore: the capacity doubles (as JVM's tables do), which halves the copying of a growing map's arrays
+            // compared to growing by half.
+            val newSize = AbstractList.newCapacity(this.capacity, minCapacity.coerceAtLeast(this.capacity * 2).let {
+                if (it < 0) minCapacity else it
+            })
             keysArray = keysArray.copyOfUninitializedElements(newSize)
             valuesArray = valuesArray?.copyOfUninitializedElements(newSize)
             presenceArray = presenceArray.copyOf(newSize)
