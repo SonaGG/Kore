@@ -221,11 +221,15 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
             collectRootSetForThread<MarkTraits>(gcHandle, worker, thread, &stackCandidates);
         }
         collectRootSetGlobals<MarkTraits>(gcHandle, worker);
+        gc::pausePhase("roots");
         markRememberedSets(worker, stackCandidates);
+        gc::pausePhase("remembered");
         Mark<MarkTraits>(gcHandle, worker);
     }
     waitHelpers();
+        gc::pausePhase("trace");
     gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
+        gc::pausePhase("weaks");
     parallelProcessor_.destroy();
 }
 

@@ -239,6 +239,8 @@ struct DefaultProcessWeaksTraits {
 
 void stopTheWorld(GCHandle gcHandle, const char* reason) noexcept;
 void resumeTheWorld(GCHandle gcHandle) noexcept;
+// Kore: with `KORE_GC_PAUSES`, the end of a phase of the current pause (reported with the pause).
+void pausePhase(const char* name) noexcept;
 
 [[nodiscard]] inline auto stopTheWorldInScope(GCHandle gcHandle) noexcept {
     return ScopeGuard([=]() { stopTheWorld(gcHandle, "GC stop the world"); }, [=]() { resumeTheWorld(gcHandle); });

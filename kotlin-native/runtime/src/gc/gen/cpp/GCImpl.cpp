@@ -708,6 +708,7 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
     state_.start(gcHandle.getEpoch());
     // Kore: the phases of the pause, for tuning it (logged with `-Xruntime-logs=gc=info`).
     uint64_t pauseStart = konan::getTimeMicros();
+    pausePhase("start");
 
     // Kore: the moving young generation.
     bool nursery = alloc::nursery::enabled();
@@ -727,6 +728,7 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
 
     RememberedSet rememberedSet;
     collectRememberedSets(rememberedSet);
+    pausePhase("collect");
     static const bool verifyYoung = std::getenv("KORE_GC_VERIFY_YOUNG") != nullptr;
     if (verifyYoung) verifyOldToYoungRemembered(allocator_, rememberedSet, gcHandle.getEpoch());
     if (nursery) {
@@ -743,6 +745,7 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
     gSliceArraysInMark.store(false, std::memory_order_relaxed);
     RuntimeAssert(gMarkArraySlices.empty(), "Array slices left after the mark");
     uint64_t markEnd = konan::getTimeMicros();
+    pausePhase("mark");
 
     if (nursery) {
         gRecordNurserySlots.store(false, std::memory_order_relaxed);
@@ -794,6 +797,7 @@ void gc::internal::GenerationalGC::performCollection(int64_t epoch) noexcept {
     } else {
         allocator_.prepareForYoungGC();
     }
+    pausePhase("prepare");
     resumeTheWorld(gcHandle);
 
     // Concurrent sweep (with the GC helper threads): the sooner it is done, the sooner allocation reuses swept pages
