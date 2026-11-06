@@ -62,6 +62,10 @@ internal class CollectionFusion(private val context: Context, private val module
         var fused = 0
         while (fused < 32) {
             val state = FunctionState(body)
+            for (creation in state.creations) {
+                val uses = analyzeUses(state, creation, quiet = true) ?: continue
+                uses.adds.forEach { state.localAdds[it] = uses }
+            }
             if (state.creations.none { tryFuse(function, state, it) }) break
             ++fused
         }
@@ -83,6 +87,9 @@ internal class CollectionFusion(private val context: Context, private val module
         val gets = HashMap<IrValueDeclaration, MutableList<IrGetValue>>()
         val returns = HashMap<IrReturnTargetSymbol, MutableList<IrReturn>>()
         val creations = ArrayList<IrVariable>()
+
+        // The adds to lists that are only filled, iterated and passed as capacity hints, and the lists' uses.
+        val localAdds = IdentityHashMap<IrCall, ListUses>()
 
         init {
             body.acceptVoid(object : IrVisitorVoid() {
@@ -174,7 +181,7 @@ internal class CollectionFusion(private val context: Context, private val module
         val sizeHints = ArrayList<IrCall>()
     }
 
-    private fun analyzeUses(state: FunctionState, creation: IrVariable): ListUses? {
+    private fun analyzeUses(state: FunctionState, creation: IrVariable, quiet: Boolean = false): ListUses? {
         if (creation.isVar) return null
         val uses = ListUses(creation)
         val worklist = ArrayDeque<IrVariable>()
@@ -184,7 +191,7 @@ internal class CollectionFusion(private val context: Context, private val module
             val variable = worklist.removeFirst()
             for (get in state.gets[variable].orEmpty()) {
                 if (!classifyUse(state, uses, get, worklist)) {
-                    reject("list ${creation.name} escapes in ${state.parents[get]?.let { it::class.simpleName }}")
+                    if (!quiet) reject("list ${creation.name} escapes in ${state.parents[get]?.let { it::class.simpleName }}")
                     return null
                 }
             }
@@ -241,17 +248,15 @@ internal class CollectionFusion(private val context: Context, private val module
         val callee = call.symbol.owner
         val name = callee.name.asString()
         if (call.superQualifierSymbol != null) return false
-        if (call.arguments.getOrNull(0) !== argument) {
-            // The list's size as the capacity of another list.
-            if (name == "collectionSizeOrDefault" && callee.fqNameWhenAvailable?.asString() == "kotlin.collections.collectionSizeOrDefault"
-                    && call.arguments.getOrNull(1) is IrConst) {
-                val parent = state.parents[call] as? IrCall ?: return false
-                if (!isArrayListInit(parent.symbol.owner) || parent.arguments.getOrNull(1) !== call) return false
-                uses.sizeHints.add(call)
-                return true
-            }
-            return false
+        // The list's size as the capacity of another list.
+        if (name == "collectionSizeOrDefault" && callee.fqNameWhenAvailable?.asString() == "kotlin.collections.collectionSizeOrDefault") {
+            if (call.arguments.getOrNull(0) !== argument || call.arguments.getOrNull(1) !is IrConst) return false
+            val parent = state.parents[call] as? IrCall ?: return false
+            if (!isArrayListInit(parent.symbol.owner) || parent.arguments.getOrNull(1) !== call) return false
+            uses.sizeHints.add(call)
+            return true
         }
+        if (call.arguments.getOrNull(0) !== argument) return false
         when {
             name == "<init>" -> {
                 if (!isArrayListInit(callee) || uses.init != null) return false
@@ -317,6 +322,7 @@ internal class CollectionFusion(private val context: Context, private val module
         val writes = HashSet<IrValueDeclaration>()
         val declared = HashSet<IrVariable>()
         val outward = ArrayList<IrElement>() // targets of returns, breaks and continues outside the analyzed code
+        val localLists = HashSet<ListUses>()  // the local lists added to
 
         val isPure get() = !heapWrite && !throws && !mayNotTerminate && outward.isEmpty()
     }
@@ -331,7 +337,7 @@ internal class CollectionFusion(private val context: Context, private val module
     private val pureIntrinsics = setOf("kotlin.internal.ir.less", "kotlin.internal.ir.lessOrEqual", "kotlin.internal.ir.greater",
             "kotlin.internal.ir.greaterOrEqual", "kotlin.internal.ir.EQEQ", "kotlin.internal.ir.EQEQEQ", "kotlin.internal.ir.ieee754equals",
             "kotlin.native.internal.reinterpret", "kotlin.native.internal.areEqualByValue",
-            "kotlin.native.internal.createUninitializedInstance")
+            "kotlin.native.internal.createUninitializedInstance", "kotlin.native.internal.theUnitInstance")
 
     private fun callKind(call: IrCall, constants: Set<IrCall>): CallKind {
         val callee = call.symbol.owner
@@ -367,7 +373,7 @@ internal class CollectionFusion(private val context: Context, private val module
      * and [skipped] are ignored.
      */
     private fun effects(roots: List<IrElement>, adds: Set<IrCall> = emptySet(), constants: Set<IrCall> = emptySet(),
-                        skipped: Set<IrElement> = emptySet()): Effects {
+                        skipped: Set<IrElement> = emptySet(), localAdds: Map<IrCall, ListUses> = emptyMap()): Effects {
         val effects = Effects()
         val inner = HashSet<IrElement>()
         val visitor = object : IrVisitorVoid() {
@@ -473,6 +479,13 @@ internal class CollectionFusion(private val context: Context, private val module
             override fun visitCall(expression: IrCall) {
                 if (expression in skipped || expression in constants) return
                 if (expression in adds) {
+                    expression.arguments[1]?.acceptVoid(this)
+                    return
+                }
+                // Adding to a local list is like writing a local variable: only the list's iterations can see it.
+                localAdds[expression]?.let {
+                    effects.localLists.add(it)
+                    expression.arguments[0]?.acceptVoid(this)
                     expression.arguments[1]?.acceptVoid(this)
                     return
                 }
@@ -607,19 +620,19 @@ internal class CollectionFusion(private val context: Context, private val module
 
         // C: the consumer's body.
         val consumerStatements = iteration.body.statements.drop(1)
-        val consumerEffects = effects(consumerStatements)
+        val consumerEffects = effects(consumerStatements, localAdds = state.localAdds)
         consumerEffects.declared.add(iteration.element)
         if (consumerEffects.outward.isNotEmpty()) return reject("jump out of the consumer")
 
-        val producerEffects = effects(listOf(producer), adds = uses.adds.toSet())
+        val producerEffects = effects(listOf(producer), adds = uses.adds.toSet(), localAdds = state.localAdds)
         val producerJumpsOut = producerEffects.outward.any { it !in producerAncestors }
 
         val declaredInK = declaredIn(k)
         val declaredFromKp = declaredIn(kp) + betweenEffects.declared + pathDeclared
         val producerPure = !producerEffects.heapWrite && !producerEffects.throws && !producerEffects.mayNotTerminate && !producerJumpsOut &&
-                producerEffects.writes.all { it in declaredInK }
+                producerEffects.writes.all { it in declaredInK } && producerEffects.localLists.all { it.creation in declaredInK }
         val consumerPure = !consumerEffects.heapWrite && !consumerEffects.throws && !consumerEffects.mayNotTerminate &&
-                consumerEffects.writes.all { it in declaredInK }
+                consumerEffects.writes.all { it in declaredInK } && consumerEffects.localLists.all { it.creation in declaredInK }
         if (!producerPure && !consumerPure) return reject("both sides have effects")
         if (producerEffects.heapWrite && consumerEffects.heapRead) return reject("consumer reads memory the producer writes")
         if (consumerEffects.heapWrite && producerEffects.heapRead) return reject("producer reads memory the consumer writes")
@@ -627,6 +640,10 @@ internal class CollectionFusion(private val context: Context, private val module
         if (producerEffects.writes.any { it in consumerEffects.reads || it in consumerEffects.writes }) return reject("producer writes what the consumer uses")
         if (consumerEffects.writes.any { it in producerEffects.reads || it in betweenEffects.reads }) return reject("consumer writes what the producer uses")
         if (betweenEffects.writes.any { it !in betweenEffects.declared || it in consumerEffects.reads }) return reject("code between writes variables")
+        if (producerEffects.localLists.any { it in consumerEffects.localLists }) return reject("both sides add to a list")
+        if ((producerEffects.localLists + consumerEffects.localLists).any { list ->
+                    list.iterators.any { state.isAncestor(producer, it) || state.isAncestor(iteration.body, it) }
+                }) return reject("a list one side adds to is iterated by a side")
         if (!consumerPure && uses.adds.any { add -> state.path(add).any { it is IrTry && state.isAncestor(producer, it) } })
             return reject("adds in a try")
 
