@@ -66,7 +66,7 @@ object BinaryOptions : BinaryOptionRegistry() {
     val immix by booleanOption()
 
     // Kore: a GC word before every heap object. Without it, the generational GC keeps its bits in the object header only
-    // (gen GC, custom allocator with Immix, no nursery; ignored otherwise).
+    // (gen GC, custom allocator with Immix, no nursery: the default there; ignored otherwise).
     val gcWord by booleanOption()
 
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.

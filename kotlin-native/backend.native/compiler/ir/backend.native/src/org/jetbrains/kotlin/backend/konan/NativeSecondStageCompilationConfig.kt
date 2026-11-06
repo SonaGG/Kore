@@ -256,8 +256,9 @@ class NativeSecondStageCompilationConfig(
     // by paged allocation (free lists in free blocks).
     val gcWordSupportedOff: Boolean
         get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u
+    // Off by default where supported: boxes take 16 bytes instead of 24 (docs/kore/gc-word.md).
     val gcWord: Boolean
-        get() = (configuration.get(BinaryOptions.gcWord) ?: true) || !gcWordSupportedOff
+        get() = (configuration.get(BinaryOptions.gcWord) ?: false) || !gcWordSupportedOff
 
     // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively. On by default where the
     // runtime can find the stack bounds and save the registers (64-bit x86 and ARM, except arm64_32).
