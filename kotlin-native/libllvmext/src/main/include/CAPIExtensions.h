@@ -29,11 +29,21 @@ int LLVMKotlinInlineCall(LLVMValueRef Call);
 ///       Currently these arguments affect the global environment:
 ///       - SaveIRAfterPasses
 ///       - SaveIRDirectory
+///
+/// Kore: when `PGOInstrumentFile` is not `NULL`, `M` is instrumented for
+/// profile-guided optimization, and the instrumented program writes its raw
+/// profile to `PGOInstrumentFile` (a pattern, as in `LLVM_PROFILE_FILE`). When
+/// `PGOUseFile` is not `NULL`, `M` is optimized using the indexed profile
+/// `PGOUseFile` (produced by `llvm-profdata merge`). Either only takes effect in
+/// pipelines that simplify the module, such as `default<O3>` and
+/// `lto-pre-link<O3>`.
 LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
                                  LLVMTargetMachineRef TM, int InlinerThreshold,
                                  LLVMKotlinPassesProfileRef *Profile,
                                  const char *SaveIRAfterPasses,
-                                 const char *SaveIRDirectory);
+                                 const char *SaveIRDirectory,
+                                 const char *PGOInstrumentFile,
+                                 const char *PGOUseFile);
 
 /// Kore: splits `M` into `Partitions` modules for parallel code generation and
 /// writes partition `i` as bitcode to `<PathPrefix><i>.bc`. Local symbols

@@ -118,7 +118,9 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
                                  LLVMTargetMachineRef TM, int InlinerThreshold,
                                  LLVMKotlinPassesProfileRef *Profile,
                                  const char *SaveIRAfterPasses,
-                                 const char *SaveIRDirectory) {
+                                 const char *SaveIRDirectory,
+                                 const char *PGOInstrumentFile,
+                                 const char *PGOUseFile) {
   // Implementation is taken from
   // https://github.com/Kotlin/llvm-project/blob/0fa53d5183ec3c0654631d719dd6dfa7a270ca98/llvm/lib/Passes/PassBuilderBindings.cpp#L47
   TargetMachine *Machine = unwrap(TM);
@@ -133,7 +135,15 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
   PTO.InlinerThreshold = InlinerThreshold;
   PTO.MaxDevirtIterations = 0;
   PassInstrumentationCallbacks PIC;
-  PassBuilder PB(Machine, PTO, std::nullopt, &PIC);
+  // Kore: instrumentation-based PGO, applied by the module simplification
+  // pipeline (in particular the LTO pre-link one).
+  std::optional<PGOOptions> PGOOpt;
+  if (PGOInstrumentFile != nullptr) {
+    PGOOpt = PGOOptions(PGOInstrumentFile, "", "", "", PGOOptions::IRInstr);
+  } else if (PGOUseFile != nullptr) {
+    PGOOpt = PGOOptions(PGOUseFile, "", "", "", PGOOptions::IRUse);
+  }
+  PassBuilder PB(Machine, PTO, PGOOpt, &PIC);
 
   // Register all Kotlin passes.
   getKotlinPluginInfo().RegisterPassBuilderCallbacks(PB);
