@@ -402,6 +402,8 @@ public open class Base64 private constructor(
         return destination
     }
 
+    // Kore: the source and destination ranges are checked first, and the table indices are masked to the tables.
+    @kotlin.internal.KoreUnchecked
     internal fun encodeIntoByteArrayImpl(
         source: ByteArray,
         destination: ByteArray,
@@ -488,6 +490,8 @@ public open class Base64 private constructor(
     private fun shouldPadOnEncode(): Boolean =
         paddingOption == PaddingOption.PRESENT || paddingOption == PaddingOption.PRESENT_OPTIONAL
 
+    // Kore: callers check the ranges and size the destination with decodeSize; the table indices are masked to the table.
+    @kotlin.internal.KoreUnchecked
     private fun decodeImpl(
         source: ByteArray,
         destination: ByteArray,
