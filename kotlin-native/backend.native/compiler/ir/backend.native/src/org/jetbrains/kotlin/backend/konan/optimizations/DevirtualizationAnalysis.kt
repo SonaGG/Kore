@@ -1808,33 +1808,37 @@ internal object DevirtualizationAnalysis {
                                     declType.isInterface -> 2 // The slowest.
                                     else -> 1 // In between.
                                 }
-                                var used = false
                             }
 
                             val targets = possibleCallees.map { Target(it.first, it.second) }
-                            var bestOrder: List<Target>? = null
-                            var bestLexOrder = Int.MAX_VALUE
-                            fun backTrack(order: List<Target>, lexOrder: Int) {
-                                if (order.size == targets.size) {
-                                    if (lexOrder < bestLexOrder) {
-                                        bestOrder = order
-                                        bestLexOrder = lexOrder
-                                    }
-                                    return
-                                }
-                                for (target in targets.filterNot { it.used }) {
-                                    val fitsAsNext = order.none { target.declType.isSubclassOf(it.declType) }
+                            // Kore: the order a backtracking search over all orders used to find, computed over subsets of
+                            // placed targets (2^n) instead of all permutations (n!, up to 40320 orders per call site,
+                            // which took seconds per link). As before: the lexicographically smallest sequence of
+                            // weights (the last target's not counted), and among those the first order in target order;
+                            // a target may not come after one of its superclasses' targets.
+                            val bestCompletion = HashMap<Int, Pair<IntArray, IntArray>?>() // Placed set -> weights, indices.
+                            fun complete(placed: Int): Pair<IntArray, IntArray>? {
+                                if (placed == (1 shl targets.size) - 1) return Pair(IntArray(0), IntArray(0))
+                                if (bestCompletion.containsKey(placed)) return bestCompletion[placed]
+                                var best: Pair<IntArray, IntArray>? = null
+                                val left = targets.size - Integer.bitCount(placed)
+                                for (index in targets.indices) {
+                                    if (placed and (1 shl index) != 0) continue
+                                    val candidate = targets[index]
+                                    val fitsAsNext = targets.indices.none { placed and (1 shl it) != 0 && candidate.declType.isSubclassOf(targets[it].declType) }
                                     if (!fitsAsNext) continue
-                                    val nextOrder = order + target
+                                    val rest = complete(placed or (1 shl index)) ?: continue
                                     // Don't count the last one since it will be in the else clause.
-                                    val nextLexOrder = if (nextOrder.size == targets.size) lexOrder else lexOrder * 3 + target.weight
-                                    target.used = true
-                                    backTrack(nextOrder, nextLexOrder)
-                                    target.used = false
+                                    val weights = intArrayOf(if (left == 1) 0 else candidate.weight) + rest.first
+                                    val indices = intArrayOf(index) + rest.second
+                                    if (best == null || compareLexicographically(weights, indices, best.first, best.second) < 0)
+                                        best = Pair(weights, indices)
                                 }
+                                bestCompletion[placed] = best
+                                return best
                             }
-
-                            backTrack(emptyList(), 0)
+                            val bestOrder = complete(0)?.second?.map { targets[it] }
+                            val bestLexOrder = if (bestOrder == null) Int.MAX_VALUE else 0
                             require(bestLexOrder != Int.MAX_VALUE) // Should never happen since there are no cycles in a type hierarchy.
 
                             val arguments = expression.getArgumentsWithIr().mapIndexed { index, arg ->
@@ -1916,4 +1920,11 @@ internal object DevirtualizationAnalysis {
             +"Actually devirtualized: ${actuallyDevirtualizedCallSitesCount * 100.0 / callSitesCount}%"
         }
     }
+}
+
+// Kore: compares (weights, indices) pairs lexicographically, weights first.
+private fun compareLexicographically(weights1: IntArray, indices1: IntArray, weights2: IntArray, indices2: IntArray): Int {
+    for (i in weights1.indices) if (weights1[i] != weights2[i]) return weights1[i].compareTo(weights2[i])
+    for (i in indices1.indices) if (indices1[i] != indices2[i]) return indices1[i].compareTo(indices2[i])
+    return 0
 }
