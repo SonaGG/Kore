@@ -69,6 +69,10 @@ object BinaryOptions : BinaryOptionRegistry() {
     // (gen GC, custom allocator with Immix, no nursery: the default there; ignored otherwise).
     val gcWord by booleanOption()
 
+    // Kore: 32-bit references in objects and `Array` elements (docs/kore/gc-redesign.md, phase 3). Supported with gc=gen,
+    // the custom allocator with Immix and no nursery, on 64-bit MinGW and Linux; ignored otherwise.
+    val compressedRefs by booleanOption()
+
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 

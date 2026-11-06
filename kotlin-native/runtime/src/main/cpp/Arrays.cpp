@@ -145,7 +145,7 @@ inline T PrimitiveArrayGet(KConstRef thiz, KInt index) {
 }
 
 template<bool BoundsCheck = true>
-PERFORMANCE_INLINE const KRef* Kotlin_Array_get_value(KConstRef thiz, KInt index) {
+PERFORMANCE_INLINE kotlin::HeapRefSlot Kotlin_Array_get_value(KConstRef thiz, KInt index) {
   const ArrayHeader* array = thiz->array();
   if (BoundsCheck)
     boundsCheck(array, index);
@@ -157,7 +157,7 @@ PERFORMANCE_INLINE void Kotlin_Array_set_value(KRef thiz, KInt index, KConstRef 
   ArrayHeader* array = thiz->array();
   if (BoundsCheck)
     boundsCheck(array, index);
-  UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, index), value);
+  UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, index).address(), value);
 }
 
 template<bool BoundsCheck = true>
@@ -201,11 +201,11 @@ KBoolean Kotlin_Arrays_primitiveContentEquals(KConstRef thiz, KConstRef other) {
 
 // Array.kt
 OBJ_GETTER(Kotlin_Array_get, KConstRef thiz, KInt index) {
-  RETURN_OBJ(*Kotlin_Array_get_value(thiz, index));
+  RETURN_OBJ(Kotlin_Array_get_value(thiz, index).load());
 }
 
 OBJ_GETTER(Kotlin_Array_get_without_BoundCheck, KConstRef thiz, KInt index){
-  RETURN_OBJ(*Kotlin_Array_get_value<false>(thiz, index));
+  RETURN_OBJ(Kotlin_Array_get_value<false>(thiz, index).load());
 }
 
 void Kotlin_Array_set(KRef thiz, KInt index, KConstRef value) {
@@ -230,7 +230,7 @@ void Kotlin_Array_fillImpl(KRef thiz, KInt fromIndex, KInt toIndex, KRef value) 
     if (start != fromIndex) Kotlin_mm_safePointWhileLoopBody();
     int64_t end = std::min<int64_t>(start + chunk, toIndex);
     for (int64_t index = start; index < end; ++index) {
-      UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, static_cast<KInt>(index)), value);
+      UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, static_cast<KInt>(index)).address(), value);
     }
   }
 }
@@ -245,10 +245,26 @@ void Kotlin_Array_copyImpl(KConstRef thiz, KInt fromIndex,
     ThrowArrayIndexOutOfBoundsException();
   }
   if (count > 0) {
-    copyInChunks(ArrayAddressOfElementAt(destinationArray, toIndex), ArrayAddressOfElementAt(array, fromIndex),
-                 static_cast<size_t>(count), [destination](KRef* to, const KRef* from, size_t n) {
-                   CopyHeapRefsInObject(destination, to, from, static_cast<uint32_t>(n));
-                 });
+    // Kore: in chunks with polls between them, like `copyInChunks` (slots are 32-bit with compressed references).
+    kotlin::HeapRefSlot to = ArrayAddressOfElementAt(destinationArray, toIndex);
+    kotlin::HeapRefSlot from = ArrayAddressOfElementAt(array, fromIndex);
+    constexpr size_t chunk = kCopyChunkBytes / sizeof(KRef);
+    size_t total = static_cast<size_t>(count);
+    if (to.address() <= from.address()) {
+      for (size_t done = 0; done < total;) {
+        size_t n = std::min(chunk, total - done);
+        CopyHeapRefsInObject(destination, (to + done).address(), (from + done).address(), static_cast<uint32_t>(n));
+        done += n;
+        if (done < total) Kotlin_mm_safePointWhileLoopBody();
+      }
+    } else {
+      for (size_t left = total; left > 0;) {
+        size_t n = std::min(chunk, left);
+        left -= n;
+        CopyHeapRefsInObject(destination, (to + left).address(), (from + left).address(), static_cast<uint32_t>(n));
+        if (left > 0) Kotlin_mm_safePointWhileLoopBody();
+      }
+    }
   }
 }
 

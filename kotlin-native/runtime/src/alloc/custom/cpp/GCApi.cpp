@@ -229,6 +229,11 @@ void* kotlin::alloc::SafeAlloc(uint64_t size, size_t unzeroedFrom, size_t unzero
             allocatedBytesCounter.fetch_add(static_cast<size_t>(size), std::memory_order_relaxed);
             return memory;
         }
+        if (compiler::compressedRefs()) {
+            // Kore: compressed references can only refer to objects in the reservation.
+            konan::consoleErrorf("Out of memory trying to allocate %" PRIu64 " bytes: the Kotlin heap reservation is full. Aborting.\n", size);
+            std::abort();
+        }
     }
     if (size >= kCachedBlockMinBytes && size <= std::numeric_limits<size_t>::max()) {
         size_t block = blockSize(static_cast<size_t>(size));

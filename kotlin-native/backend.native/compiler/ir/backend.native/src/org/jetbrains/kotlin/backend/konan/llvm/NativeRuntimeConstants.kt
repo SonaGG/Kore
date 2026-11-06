@@ -31,6 +31,7 @@ object NativeRuntimeConstants {
     const val GC_NURSERY_SIZE: String = "Kotlin_gcNurserySize" // Kore
     const val CONSERVATIVE_STACKS: String = "Kotlin_conservativeStacks" // Kore
     const val IMMIX: String = "Kotlin_immix" // Kore
+    const val COMPRESSED_REFS: String = "Kotlin_compressedRefs" // Kore
     const val GC_WORD: String = "Kotlin_gcWord" // Kore
     const val PAGED_ALLOCATOR: String = "Kotlin_pagedAllocator"
 }

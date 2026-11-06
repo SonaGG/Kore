@@ -642,7 +642,7 @@ internal object EscapeAnalysis {
         private val pointerSize = generationState.runtime.pointerSize
 
         private fun arrayItemSizeOf(irClass: IrClass): Int? = when (irClass.symbol) {
-            irBuiltIns.arrayClass -> pointerSize
+            irBuiltIns.arrayClass -> if (context.config.compressedRefs) 4 else pointerSize // Kore: compressed references.
             irBuiltIns.booleanArray -> 1
             irBuiltIns.byteArray -> 1
             irBuiltIns.charArray -> 2
@@ -1646,6 +1646,21 @@ internal object EscapeAnalysis {
 
                 escapeOrigins.forEach { propagateEscapeOrigin(it) }
 
+                // Kore: with compressed references, an object stored into a field or an array element must not be on the
+                // stack: 32-bit references only reach the heap and the image (docs/kore/gc-redesign.md, phase 3).
+                val storedIntoFields = if (context.config.compressedRefs) nodesStoredIntoFields() else emptySet()
+                // A parameter stored into a field escapes: the field may belong to an object of this function (or of a callee) that
+                // the summary does not show to callers, which must then not allocate the argument on the stack.
+                if (context.config.compressedRefs) {
+                    for (entry in nodes) {
+                        val ptgNode = entry.value
+                        if (entry.key is DataFlowIR.Node.Parameter && ptgNode in storedIntoFields && ptgNode !in escapeOrigins) {
+                            escapeOrigins += ptgNode
+                            propagateEscapeOrigin(ptgNode)
+                        }
+                    }
+                }
+
                 // TODO: To a setting?
                 val allowedToAlloc = 65536
                 val stackArrayCandidates = mutableListOf<ArrayStaticAllocation>()
@@ -1659,6 +1674,7 @@ internal object EscapeAnalysis {
                         // TODO: Support other lifetimes - requires arenas.
                         lifetime = Lifetime.GLOBAL
                     }
+                    if (lifetime == Lifetime.STACK && ptgNode in storedIntoFields) lifetime = Lifetime.GLOBAL
 
                     if (lifetime == Lifetime.STACK && node is DataFlowIR.Node.AllocArray) {
                         val constructedType = node.type
@@ -1713,6 +1729,19 @@ internal object EscapeAnalysis {
                         }
                     }
                 }
+            }
+
+            // Kore: the nodes whose values may be stored into a field (or an array element). Once the drains are built (assignment
+            // components merged, with the field edges on their drains), these are the nodes whose drain is the drain of a field
+            // node: conservative, as components merge assignments in both directions.
+            private fun nodesStoredIntoFields(): Set<PointsToGraphNode> {
+                val fieldDrains = mutableSetOf<PointsToGraphNode>()
+                for (node in allNodes) {
+                    for (edge in node.edges) {
+                        if (edge is PointsToGraphEdge.Field) fieldDrains += edge.node.actualDrain
+                    }
+                }
+                return allNodes.filterTo(mutableSetOf()) { it.actualDrain in fieldDrains }
             }
 
             private fun findReachableDrains(drain: PointsToGraphNode, visitedDrains: MutableSet<PointsToGraphNode>) {

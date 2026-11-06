@@ -260,6 +260,15 @@ class NativeSecondStageCompilationConfig(
     val gcWord: Boolean
         get() = (configuration.get(BinaryOptions.gcWord) ?: false) || !gcWordSupportedOff
 
+    // Kore: 32-bit references in objects and `Array` elements (docs/kore/gc-redesign.md, phase 3).
+    val compressedRefs: Boolean
+        get() = (configuration.get(BinaryOptions.compressedRefs) ?: false) && compressedRefsSupported
+
+    private val compressedRefsSupported: Boolean
+        get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u &&
+                target.architecture == Architecture.X64 &&
+                (target.family == Family.MINGW || target.family == Family.LINUX || target.family == Family.ANDROID)
+
     // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively. On by default where the
     // runtime can find the stack bounds and save the registers (64-bit x86 and ARM, except arm64_32).
     val conservativeStacks: Boolean
@@ -705,6 +714,8 @@ class NativeSecondStageCompilationConfig(
     internal val ignoreCacheReason = when {
         optimizationsEnabled && !enableReleaseBinaryCache -> "with global optimizations"
         forceNativeThreadStateForFunctions != defaultForceNativeThreadStateForFunctions -> "with non-default forceNativeThreadStateForFunctions"
+        // Kore: caches are compiled with full-pointer references.
+        compressedRefs -> "with compressed references"
         else -> null
     }
 

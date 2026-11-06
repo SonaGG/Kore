@@ -5,6 +5,8 @@
 
 #include "HeapReservation.hpp"
 
+#include "Allocator.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
@@ -13,9 +15,15 @@
 #if KONAN_WINDOWS
 #include <windows.h>
 #else
+#include <dlfcn.h>
+#include <link.h>
 #include <sys/mman.h>
 #endif
 
+#include <vector>
+
+#include "CompilerConstants.hpp"
+#include "CompressedRefs.hpp"
 #include "Porting.h"
 
 using namespace kotlin;
@@ -43,6 +51,131 @@ uint8_t* reserve(size_t bytes) noexcept {
 #endif
 }
 
+// Kore: compressed references (docs/kore/gc-redesign.md, phase 3). The heap and the image (whose permanent objects
+// references can point to) must lie within `kCompressedWindow` above `Kotlin_heapBase`. Finds the largest free range of
+// address space next to the image that fits, reserves it and sets the base. Aborts if there is none.
+constexpr size_t kCompressedWindow = size_t(32) << 30;
+constexpr size_t kGranularity = 64 * 1024;
+
+struct ImageRange {
+    uintptr_t start;
+    uintptr_t end;
+};
+
+ImageRange imageRange() noexcept {
+#if KONAN_WINDOWS
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&imageRange), &module);
+    auto start = reinterpret_cast<uintptr_t>(module);
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(start);
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(start + dos->e_lfanew);
+    return {start, start + nt->OptionalHeader.SizeOfImage};
+#else
+    Dl_info info{};
+    dladdr(reinterpret_cast<void*>(&imageRange), &info);
+    struct Search {
+        uintptr_t address;
+        ImageRange range;
+    } search{reinterpret_cast<uintptr_t>(&imageRange), {0, 0}};
+    dl_iterate_phdr(
+            [](dl_phdr_info* phdr, size_t, void* data) -> int {
+                auto* search = static_cast<Search*>(data);
+                uintptr_t low = UINTPTR_MAX, high = 0;
+                for (int i = 0; i < phdr->dlpi_phnum; ++i) {
+                    if (phdr->dlpi_phdr[i].p_type != PT_LOAD) continue;
+                    uintptr_t segmentStart = phdr->dlpi_addr + phdr->dlpi_phdr[i].p_vaddr;
+                    low = std::min(low, segmentStart);
+                    high = std::max(high, segmentStart + phdr->dlpi_phdr[i].p_memsz);
+                }
+                if (search->address < low || search->address >= high) return 0;
+                search->range = {low, high};
+                return 1;
+            },
+            &search);
+    return search.range;
+#endif
+}
+
+uint8_t* reserveAt(uintptr_t address, size_t bytes) noexcept {
+#if KONAN_WINDOWS
+    return static_cast<uint8_t*>(VirtualAlloc(reinterpret_cast<void*>(address), bytes, MEM_RESERVE, PAGE_NOACCESS));
+#else
+    void* memory = mmap(reinterpret_cast<void*>(address), bytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (memory == MAP_FAILED) return nullptr;
+    if (reinterpret_cast<uintptr_t>(memory) != address) {
+        munmap(memory, bytes);
+        return nullptr;
+    }
+    return static_cast<uint8_t*>(memory);
+#endif
+}
+
+alloc::HeapReservation* reserveCompressed(size_t maxBytes) noexcept {
+    ImageRange image = imageRange();
+    if (image.end == 0) {
+        konan::consoleErrorf("Kore: compressed references: could not find the image. Aborting.\n");
+        std::abort();
+    }
+    uintptr_t imageStart = image.start & ~(kGranularity - 1);
+    uintptr_t imageEnd = (image.end + kGranularity - 1) & ~(kGranularity - 1);
+    // The window is the 32 GiB-aligned span holding the image: with an aligned base, encoding needs no base (and null
+    // encodes to 0 by itself), see `encodeRef`.
+    uintptr_t base = imageStart & ~(kCompressedWindow - 1);
+    if (imageEnd > base + kCompressedWindow) {
+        konan::consoleErrorf("Kore: compressed references: the image crosses a 32 GiB boundary. Aborting.\n");
+        std::abort();
+    }
+    // Free ranges of the window, the heap starting `kCompressedRefsHeapOffset` above the base or more (see the
+    // conservative stack scan).
+    uintptr_t from = base + kCompressedRefsHeapOffset;
+    uintptr_t to = base + kCompressedWindow;
+    struct Candidate {
+        uintptr_t start;
+        uintptr_t end;
+    };
+    std::vector<Candidate> candidates;
+    auto consider = [&](uintptr_t start, uintptr_t end) {
+        start = std::max((start + kGranularity - 1) & ~(kGranularity - 1), from);
+        end = std::min(end & ~(kGranularity - 1), to);
+        // Not overlapping the image.
+        if (start < imageEnd && end > imageStart) {
+            if (start < imageStart) end = imageStart; else start = imageEnd;
+        }
+        if (end <= start) return;
+        if (end - start > maxBytes) end = start + maxBytes;
+        candidates.push_back({start, end});
+    };
+#if KONAN_WINDOWS
+    for (uintptr_t address = from; address < to;) {
+        MEMORY_BASIC_INFORMATION info;
+        if (VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) == 0) break;
+        auto regionStart = reinterpret_cast<uintptr_t>(info.BaseAddress);
+        uintptr_t regionEnd = regionStart + info.RegionSize;
+        if (info.State == MEM_FREE) consider(std::max(regionStart, from), std::min(regionEnd, to));
+        address = regionEnd;
+    }
+#else
+    // Without a portable map of the address space: try ranges of decreasing sizes on both sides of the image.
+    for (size_t bytes = kCompressedWindow; bytes >= (size_t(256) << 20); bytes /= 2) {
+        if (imageStart > from + bytes) consider(imageStart - bytes, imageStart);
+        consider(imageEnd, imageEnd + bytes);
+        consider(from, from + bytes);
+    }
+#endif
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.end - a.start > b.end - b.start; });
+    for (auto& candidate : candidates) {
+        size_t bytes = candidate.end - candidate.start;
+        if (uint8_t* memory = reserveAt(candidate.start, bytes)) {
+            Kotlin_heapBase = base;
+            return new alloc::HeapReservation(memory, bytes);
+        }
+    }
+    konan::consoleErrorf("Kore: compressed references: no address space for the Kotlin heap near the image. Aborting.\n");
+    std::abort();
+}
+
 [[noreturn]] void outOfMemory(size_t bytes) noexcept {
     konan::consoleErrorf("Out of memory trying to commit %zu bytes of the Kotlin heap. Aborting.\n", bytes);
     std::abort();
@@ -56,6 +189,7 @@ alloc::HeapReservation* alloc::HeapReservation::instance() noexcept {
         size_t bytes = environmentSize("KORE_HEAP_RESERVE_GB", 32, size_t(1) << 30);
         // Page numbers are 32-bit.
         bytes = std::min(bytes, (size_t(1) << 32) * kPageSize - kPageSize);
+        if (compiler::compressedRefs()) return reserveCompressed(bytes == 0 ? kCompressedWindow : bytes);
         if (bytes == 0) return nullptr;
         // Smaller reservations if the address space is limited.
         while (bytes >= (size_t(1) << 30)) {
@@ -239,4 +373,8 @@ void alloc::HeapReservation::zeroCommitted(Page start, Page length, size_t unzer
             if (unzeroedEnd < to) std::memset(begin + unzeroedEnd, 0, to - unzeroedEnd);
         }
     }
+}
+
+void kotlin::alloc::initCompressedRefsBase() noexcept {
+    HeapReservation::instance();
 }

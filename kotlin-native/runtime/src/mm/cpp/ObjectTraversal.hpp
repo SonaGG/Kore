@@ -23,8 +23,8 @@ PERFORMANCE_INLINE void traverseClassObjectFields(ObjHeader* object, F process) 
     const TypeInfo* typeInfo = object->type_info();
     RuntimeAssert(typeInfo != theArrayTypeInfo, "Must not be an array of objects");
     for (int index = 0; index < typeInfo->objOffsetsCount_; index++) {
-        auto fieldPtr = reinterpret_cast<ObjHeader**>(reinterpret_cast<uintptr_t>(object) + typeInfo->objOffsets_[index]);
-        process(mm::RefFieldAccessor(fieldPtr));
+        auto* fieldPtr = reinterpret_cast<uint8_t*>(object) + typeInfo->objOffsets_[index];
+        process(mm::RefFieldAccessor(HeapRefSlot(fieldPtr)));
     }
 }
 
@@ -42,8 +42,8 @@ PERFORMANCE_INLINE void traverseObjectFields(ObjHeader* object, F process) noexc
     // Only consider arrays of objects, not arrays of primitives.
     if (typeInfo != theArrayTypeInfo) {
         for (int index = 0; index < typeInfo->objOffsetsCount_; index++) {
-            auto fieldPtr = reinterpret_cast<ObjHeader**>(reinterpret_cast<uintptr_t>(object) + typeInfo->objOffsets_[index]);
-            process(mm::RefFieldAccessor(fieldPtr));
+            auto* fieldPtr = reinterpret_cast<uint8_t*>(object) + typeInfo->objOffsets_[index];
+            process(mm::RefFieldAccessor(HeapRefSlot(fieldPtr)));
         }
     } else {
         ArrayHeader* array = object->array();

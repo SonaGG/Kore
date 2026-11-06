@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "CompressedRefs.hpp"
 #include "Memory.h"
 #include "std_support/Atomic.hpp"
 
@@ -39,27 +40,34 @@ public:
     DirectRefAccessor() = delete;
     DirectRefAccessor& operator=(const DirectRefAccessor&) = delete;
 
-    explicit DirectRefAccessor(ObjHeader*& fieldRef) noexcept : ref_(fieldRef) {}
-    explicit DirectRefAccessor(ObjHeader** fieldPtr) noexcept : DirectRefAccessor(*fieldPtr) {}
+    // A full-pointer slot: a local, a global, a thread local, or memory outside of Kotlin objects.
+    explicit DirectRefAccessor(ObjHeader*& fieldRef) noexcept : location_(&fieldRef), narrow_(false) {}
+    explicit DirectRefAccessor(ObjHeader** fieldPtr) noexcept : location_(fieldPtr), narrow_(false) {}
+    // Kore: a reference slot of an object (a field or an `Array` element): 32-bit with compressed references.
+    explicit DirectRefAccessor(HeapRefSlot slot) noexcept : location_(slot.address()), narrow_(compiler::compressedRefs()) {}
     DirectRefAccessor(const DirectRefAccessor& other) = default;
 
-    ObjHeader** location() const noexcept { return &ref_; }
+    // The address of the slot (an `ObjHeader**` unless `narrow()`).
+    void* address() const noexcept { return location_; }
+    bool narrow() const noexcept { return narrow_; }
+    ObjHeader** location() const noexcept {
+        RuntimeAssert(!narrow_, "A compressed reference slot has no ObjHeader** location");
+        return static_cast<ObjHeader**>(location_);
+    }
 
     PERFORMANCE_INLINE operator ObjHeader*() const noexcept { return load(); }
     PERFORMANCE_INLINE ObjHeader* operator=(ObjHeader* desired) noexcept { store(desired); return desired; }
 
     PERFORMANCE_INLINE ObjHeader* load() const noexcept {
 #if STRICT_ATOMICS_IN_HEAP
-        // Consume stores in the object, that were released on the object's allocation
-        // See `ObjectOps.cpp`
         auto loaded = loadAtomic(std::memory_order_consume);
 #if __has_feature(thread_sanitizer)
-        // The stores were released by an atomic_thread_fence, TSAN doesn't support fences.
         __tsan_acquire(loaded);
 #endif
         return loaded;
 #else
-        return ref_;
+        if (narrow_) return HeapRefSlot(location_).load();
+        return *static_cast<ObjHeader**>(location_);
 #endif
     }
 
@@ -67,32 +75,37 @@ public:
 #if STRICT_ATOMICS_IN_HEAP
         storeAtomic(desired, std::memory_order_relaxed);
 #else
-        ref_ = desired;
+        if (narrow_) {
+            HeapRefSlot(location_).store(desired);
+        } else {
+            *static_cast<ObjHeader**>(location_) = desired;
+        }
 #endif
     }
 
-    PERFORMANCE_INLINE auto atomic() noexcept {
-        return std_support::atomic_ref{ref_};
-    }
-    PERFORMANCE_INLINE auto atomic() const noexcept {
-        return std_support::atomic_ref{ref_};
-    }
-
     PERFORMANCE_INLINE ObjHeader* loadAtomic(std::memory_order order) const noexcept {
-        return atomic().load(order);
+        if (narrow_) return HeapRefSlot(location_).loadAtomic(order);
+        return std_support::atomic_ref{*static_cast<ObjHeader**>(location_)}.load(order);
     }
     PERFORMANCE_INLINE void storeAtomic(ObjHeader* desired, std::memory_order order) noexcept {
-        atomic().store(desired, order);
+        if (narrow_) {
+            HeapRefSlot(location_).storeAtomic(desired, order);
+        } else {
+            std_support::atomic_ref{*static_cast<ObjHeader**>(location_)}.store(desired, order);
+        }
     }
     PERFORMANCE_INLINE ObjHeader* exchange(ObjHeader* desired, std::memory_order order) noexcept {
-        return atomic().exchange(desired, order);
+        if (narrow_) return HeapRefSlot(location_).exchange(desired, order);
+        return std_support::atomic_ref{*static_cast<ObjHeader**>(location_)}.exchange(desired, order);
     }
     PERFORMANCE_INLINE bool compareAndExchange(ObjHeader*& expected, ObjHeader* desired, std::memory_order order) noexcept {
-        return atomic().compare_exchange_strong(expected, desired, order);
+        if (narrow_) return HeapRefSlot(location_).compareAndExchange(expected, desired, order);
+        return std_support::atomic_ref{*static_cast<ObjHeader**>(location_)}.compare_exchange_strong(expected, desired, order);
     }
 
 private:
-    ObjHeader*& ref_;
+    void* location_;
+    bool narrow_;
 };
 
 /**
@@ -108,6 +121,8 @@ public:
 
     explicit RefAccessor(ObjHeader*& fieldRef) noexcept : direct_(fieldRef) {}
     explicit RefAccessor(ObjHeader** fieldPtr) noexcept : RefAccessor(*fieldPtr) {}
+    // Kore: a reference slot of an object (32-bit with compressed references).
+    explicit RefAccessor(HeapRefSlot slot) noexcept : direct_(slot) {}
     RefAccessor(const RefAccessor& other) noexcept : direct_(other.direct_) {}
 
     DirectRefAccessor direct() const noexcept { return direct_; }

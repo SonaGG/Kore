@@ -19,6 +19,7 @@
 
 #include "Types.h"
 #include "Exceptions.h"
+#include "CompressedRefs.hpp"
 #include "Memory.h"
 
 constexpr size_t alignUp(size_t size, size_t alignment) {
@@ -81,12 +82,11 @@ inline const T* PrimitiveArrayAddressOfElementAt(const ArrayHeader* obj, KInt in
   return AddressOfElementAt<T>(obj, index);
 }
 
-inline KRef* ArrayAddressOfElementAt(ArrayHeader* obj, KInt index) {
-  return AddressOfElementAt<KRef>(obj, index);
-}
-
-inline const KRef* ArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
-  return AddressOfElementAt<KRef>(obj, index);
+// Kore: elements of `Array`s are 32-bit with compressed references (see `HeapRefSlot`). Arrays of every element size have
+// their elements at the same offset.
+inline kotlin::HeapRefSlot ArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
+  auto* body = const_cast<int8_t*>(reinterpret_cast<const int8_t*>(obj)) + alignUp(sizeof(ArrayHeader), alignof(KRef));
+  return kotlin::HeapRefSlot(body + static_cast<ptrdiff_t>(index) * static_cast<ptrdiff_t>(kotlin::heapRefSize()));
 }
 
 #ifdef __cplusplus
@@ -98,7 +98,7 @@ void Kotlin_io_Console_println0();
 void Kotlin_io_Console_println0ToStdErr();
 void Kotlin_NativePtrArray_set(KRef thiz, KInt index, KNativePtr value);
 KNativePtr Kotlin_NativePtrArray_get(KConstRef thiz, KInt index);
-RUNTIME_NOTHROW RUNTIME_PURE KRef* Kotlin_arrayGetElementAddress(KRef array, KInt index);
+RUNTIME_NOTHROW RUNTIME_PURE void* Kotlin_arrayGetElementAddress(KRef array, KInt index);
 RUNTIME_NOTHROW RUNTIME_PURE KInt* Kotlin_intArrayGetElementAddress(KRef array, KInt index);
 RUNTIME_NOTHROW RUNTIME_PURE KLong* Kotlin_longArrayGetElementAddress(KRef array, KInt index);
 

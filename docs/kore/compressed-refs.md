@@ -1,7 +1,37 @@
 # Kore: compressed 32-bit references and 4-byte object headers
 
-Status: design only, not implemented. This is the most invasive item on the performance list. It changes the in-memory
-object layout, but not the klib format or the Kotlin ABI.
+Status: compressed references implemented behind `-Xbinary=compressedRefs=true` (gc=gen with Immix, no nursery, 64-bit
+MinGW and Linux); 4-byte headers not yet. See "Implementation" below; the design that follows is the original plan, and
+the implementation differs where noted. It changes the in-memory object layout, but not the klib format or the Kotlin
+ABI.
+
+## Implementation
+
+- **Encoding.** `ref = (address - Kotlin_heapBase) >> 3`, 0 for null; decoding is `ref == 0 ? null : base + ref * 8` (a
+  `test` and a `cmov` around one `lea`, and nothing more where the compiler knows the reference is not null). The base
+  is not zero: Windows places ASLR images above 32 GiB, and permanent objects in the image must stay encodable. It is
+  the 32 GiB-aligned address below the image, so that encoding is one shift (`address >> 3`, truncated: the base
+  vanishes modulo 2^32, and null encodes to 0). The heap reservation (`HeapReservation`) is the largest free range of
+  that 32 GiB span, at least 4 GiB above the base (see the stack scan below).
+- **What is compressed.** Reference fields of objects (heap, stack and permanent) and `Array` elements. Static fields,
+  thread locals and locals stay full pointers. Runtime: `HeapRefSlot` (`CompressedRefs.hpp`) and the slot-aware
+  `DirectRefAccessor`; the `*HeapRef*` entry points take 32-bit slots, the new `*VolatileStaticRef` ones full ones.
+  Compiler: `i32` field and element types (`heapRefType`), `loadHeapRef`/`decodeRef` for loads, stores through the
+  runtime barriers (which encode).
+- **Permanent objects.** Their references are relative to a base known at run time only: they are emitted as 0 into
+  writable globals, and a module constructor calls `Kotlin_applyCompressedRefFixups` with the (slot, object) pairs.
+- **Stack objects.** A stack address cannot be encoded. Escape analysis keeps on the heap every object that may be
+  stored into a field (`nodesStoredIntoFields`: nodes whose drain is the drain of a field node), and treats a parameter
+  stored into a field as escaping, since the field may belong to an object of a callee that its summary hides.
+- **Conservative stack scan.** Compiled code may hold a reference across a call as a 32-bit value, or as its byte
+  offset from the base (`ref * 8`, a common subexpression of decoding). The scan also tries both halves of each stack
+  word as 32-bit references, and words below 32 GiB as offsets. With the heap 4 GiB or more above the base, 32-bit
+  integers in either form never point into the heap.
+- **Caches.** Compiler caches (of full-pointer code) are not used with compressed references.
+- **Results** (mingw_x64): the Compose huge-tree cold run peaks at 96-107 MiB (101 MiB upstream, 130-156 MiB without
+  compressed references), with the first composition in 125 ms (221 ms without, 419 ms upstream). Objects with three
+  references take 20 bytes instead of 32. CPU-bound microbenchmarks range from 8% faster (pointer chasing) to 20% slower
+  (HashMap), the game benchmark is 5% slower: not the default yet.
 
 ## Why
 

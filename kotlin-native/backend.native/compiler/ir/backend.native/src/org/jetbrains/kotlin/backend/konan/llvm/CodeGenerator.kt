@@ -466,7 +466,7 @@ internal class StackLocalsManagerImpl(
 
     // TODO: find better place?
     private val arrayToElementType = mapOf(
-            irBuiltIns.arrayClass to llvm.pointerType,
+            irBuiltIns.arrayClass to llvm.heapRefType, // Kore: 32-bit elements with compressed references.
             irBuiltIns.byteArray to llvm.int8Type,
             irBuiltIns.charArray to llvm.int16Type,
             irBuiltIns.stringClass to llvm.int16Type,
@@ -775,6 +775,21 @@ internal abstract class FunctionGenerationContext(
         return store
     }
 
+    // Kore: compressed references (docs/kore/gc-redesign.md, phase 3). A 32-bit reference to a pointer: null for 0, else
+    // `Kotlin_heapBase + ref * 8`.
+    fun decodeRef(ref: LLVMValueRef): LLVMValueRef {
+        val base = loadInvariant(llvm.pointerType, llvm.heapBaseGlobal)
+        val offset = shl(zext(ref, llvm.int64Type), 3)
+        val address = gep(llvm.int8Type, base, offset)
+        return select(icmpEq(ref, llvm.int32(0)), llvm.kNull, address)
+    }
+
+    // Kore: loads a reference from a slot of an object (a field or an `Array` element), decoding it if compressed.
+    fun loadHeapRef(address: LLVMValueRef, memoryOrder: LLVMAtomicOrdering? = null, alignment: Int? = null): LLVMValueRef {
+        if (!llvm.compressedRefs) return load(llvm.pointerType, address, memoryOrder = memoryOrder, alignment = alignment)
+        return decodeRef(load(llvm.int32Type, address, memoryOrder = memoryOrder, alignment = alignment?.coerceAtMost(4)))
+    }
+
     fun storeHeapRef(value: LLVMValueRef, ptr: LLVMValueRef) {
         updateRef(value, ptr, onStack = false)
     }
@@ -807,7 +822,7 @@ internal abstract class FunctionGenerationContext(
 
     private fun updateRef(value: LLVMValueRef, address: LLVMValueRef, onStack: Boolean,
                           isVolatile: Boolean = false, alignment: Int? = null) {
-        require(alignment == null || alignment % runtime.pointerAlignment == 0)
+        require(alignment == null || llvm.compressedRefs || alignment % runtime.pointerAlignment == 0)
         if (onStack) {
             require(!isVolatile) { "Stack ref update can't be volatile"}
             if (conservativeStacks) store(value, address) else call(llvm.updateStackRefFunction, listOf(address, value))

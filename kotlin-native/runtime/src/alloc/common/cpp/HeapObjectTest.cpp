@@ -20,7 +20,7 @@ inline constexpr uint32_t kArraySize = 11;
 struct ObjectArrayOps {
     static const TypeInfo* arrayTypeInfo() { return theArrayTypeInfo; }
     static uint8_t* addressOfElementAt(ArrayHeader* arr, uint32_t index) {
-        return reinterpret_cast<uint8_t*>(ArrayAddressOfElementAt(arr, index));
+        return static_cast<uint8_t*>(ArrayAddressOfElementAt(arr, index).address());
     }
 };
 

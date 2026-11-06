@@ -95,6 +95,9 @@ private:
 };
 
 void initObjectPool() noexcept;
+
+// Kore: compressed references (docs/kore/gc-redesign.md, phase 3): reserves the heap, which sets `Kotlin_heapBase`.
+void initCompressedRefsBase() noexcept;
 // Instruct the allocator to free unused resources.
 void compactObjectPoolInCurrentThread() noexcept;
 

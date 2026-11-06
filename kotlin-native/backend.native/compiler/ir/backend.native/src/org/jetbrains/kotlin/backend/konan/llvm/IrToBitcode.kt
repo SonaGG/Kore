@@ -365,7 +365,22 @@ internal class CodeGeneratorVisitor(
             }
         }
 
+        generateCompressedRefFixups()
         appendStaticInitializers()
+    }
+
+    // Kore: compressed references (docs/kore/gc-redesign.md, phase 3): the module constructor writes the references in
+    // permanent objects, which are relative to a base only known at run time.
+    private fun generateCompressedRefFixups() {
+        val fixups = codegen.staticData.compressedRefFixups
+        if (fixups.isEmpty()) return
+        val table = codegen.staticData.placeGlobalArray("", llvm.pointerType, fixups.flatMap { listOf(it.first, it.second) })
+        val proto = LlvmFunctionSignature(LlvmRetType(llvm.voidType, isObjectType = false)).toProto("", null, LLVMLinkage.LLVMPrivateLinkage)
+        val initializer = generateFunctionNoRuntime(codegen, proto) {
+            call(llvm.Kotlin_applyCompressedRefFixups, listOf(table.pointer.llvm, llvm.int32(fixups.size)))
+            ret(null)
+        }
+        llvm.otherStaticInitializers += initializer
     }
 
     //-------------------------------------------------------------------------//
@@ -1678,6 +1693,15 @@ internal class CodeGeneratorVisitor(
             }
         }
         val fieldType = value.type.toLLVMType(llvm)
+        if (llvm.compressedRefs && !value.symbol.owner.isStatic && value.type.binaryTypeIsReference()) {
+            // Kore: a 32-bit reference (docs/kore/gc-redesign.md, phase 3).
+            val loaded = functionGenerationContext.loadHeapRef(fieldAddress, memoryOrder = order, alignment = alignment)
+            if (!value.symbol.owner.isFinal) {
+                val slot = resultSlot ?: functionGenerationContext.alloca(fieldType, true, variableLocation = null)
+                functionGenerationContext.storeStackRef(loaded, slot)
+            }
+            return loaded
+        }
         return functionGenerationContext.loadSlot(
                 fieldType,
                 value.type.binaryTypeIsReference(),
@@ -1750,6 +1774,9 @@ internal class CodeGeneratorVisitor(
         } else if (thisPtr == null && field.type.binaryTypeIsReference() && !isVolatile) {
             // Kore: static fields are GC roots, the generational barrier need not remember them.
             functionGenerationContext.storeStaticRef(valueToAssign, address)
+        } else if (thisPtr == null && field.type.binaryTypeIsReference() && isVolatile) {
+            // Kore: static fields keep full pointers (unlike object fields with compressed references).
+            functionGenerationContext.call(llvm.UpdateVolatileStaticRef, listOf(address, valueToAssign))
         } else if (thisPtr != null && !isVolatile) {
             llvm.setFieldTbaa(functionGenerationContext.store(valueToAssign, address, alignment = alignment), LLVMTypeOf(valueToAssign)!!)
         } else {
@@ -2945,6 +2972,7 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleR
         setRuntimeConstGlobal(NativeRuntimeConstants.GC_NURSERY_SIZE, config.gcNurserySize.toInt().toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.CONSERVATIVE_STACKS, config.conservativeStacks.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.IMMIX, config.immix.toLlvmConstInt32())
+        setRuntimeConstGlobal(NativeRuntimeConstants.COMPRESSED_REFS, config.compressedRefs.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.GC_WORD, config.gcWord.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.PAGED_ALLOCATOR, config.pagedAllocator.toLlvmConstInt32())
     }

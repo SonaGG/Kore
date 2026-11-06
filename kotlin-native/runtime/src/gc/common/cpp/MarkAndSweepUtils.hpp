@@ -122,6 +122,15 @@ void collectConservativeStackCandidates(
     size_t first = candidates.size();
     auto consider = [&](uintptr_t word) {
         if (word >= 4096) candidates.push_back(reinterpret_cast<ObjHeader**>(word));
+        // Kore: with compressed references (docs/kore/gc-redesign.md, phase 3), objects on the stack hold 32-bit references,
+        // and compiled code may keep a reference as such or as its byte offset from the base (`ref * 8`) across a call.
+        // The heap starts at least 4 GiB above the base, so that 32-bit integers in either form never point into it.
+        if (compiler::compressedRefs()) {
+            for (uint32_t half : {static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32)}) {
+                if (half != 0) candidates.push_back(reinterpret_cast<ObjHeader**>(decodeRef(half)));
+            }
+            if (word < kCompressedRefsWindow) candidates.push_back(reinterpret_cast<ObjHeader**>(Kotlin_heapBase + word));
+        }
     };
     uintptr_t high = suspension.stackBase();
     for (uintptr_t address = suspension.savedStackPointer() & ~uintptr_t(7); address + sizeof(uintptr_t) <= high;

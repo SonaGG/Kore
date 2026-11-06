@@ -121,14 +121,16 @@ extern "C" RUNTIME_NOTHROW void RegisterGlobal(ObjHeader** location) {
     mm::GlobalsRegistry::Instance().RegisterStorageForGlobal(threadData, location);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void ZeroHeapRef(ObjHeader** location) {
-    mm::RefAccessor<false>{location} = nullptr;
+// Kore: the `location`s of the `*HeapRef*` functions are reference slots of objects (fields and `Array` elements): 32-bit
+// with compressed references. Globals and thread locals go through the `*StaticRef*` functions, locals through the
+// `*StackRef*` ones.
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void ZeroHeapRef(void* location) {
+    mm::RefFieldAccessor{HeapRefSlot(location)} = nullptr;
 }
 
 extern "C" RUNTIME_NOTHROW void ZeroArrayRefs(ArrayHeader* array) {
     for (uint32_t index = 0; index < array->count_; ++index) {
-        ObjHeader** location = ArrayAddressOfElementAt(array, index);
-        mm::RefFieldAccessor{location} = nullptr;
+        mm::RefFieldAccessor{ArrayAddressOfElementAt(array, index)} = nullptr;
     }
 }
 
@@ -140,8 +142,8 @@ extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateStackRef(ObjHeader** lo
     mm::StackRefAccessor{location} = const_cast<ObjHeader*>(object);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRef(ObjHeader** location, const ObjHeader* object) {
-    mm::RefAccessor<false>{location} = const_cast<ObjHeader*>(object);
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRef(void* location, const ObjHeader* object) {
+    mm::RefFieldAccessor{HeapRefSlot(location)} = const_cast<ObjHeader*>(object);
 }
 
 extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateStaticRef(ObjHeader** location, const ObjHeader* object) {
@@ -151,33 +153,52 @@ extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateStaticRef(ObjHeader** l
     ref.store(value);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRefInObject(ObjHeader* holder, ObjHeader** location, const ObjHeader* object) {
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRefInObject(ObjHeader* holder, void* location, const ObjHeader* object) {
     auto* value = const_cast<ObjHeader*>(object);
-    mm::DirectRefAccessor ref{location};
+    mm::DirectRefAccessor ref{HeapRefSlot(location)};
     gc::beforeHeapRefUpdateInObject(holder, ref, value);
     ref.store(value);
 }
 
-extern "C" RUNTIME_NOTHROW void CopyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, uint32_t count) {
-    gc::copyHeapRefsInObject(holder, destination, source, count);
+extern "C" RUNTIME_NOTHROW void CopyHeapRefsInObject(ObjHeader* holder, void* destination, const void* source, uint32_t count) {
+    gc::copyHeapRefsInObject(holder, HeapRefSlot(destination), HeapRefSlot(const_cast<void*>(source)), count);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) {
-    mm::RefAccessor<false>{location}.storeAtomic(const_cast<ObjHeader*>(object), std::memory_order_seq_cst);
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateVolatileHeapRef(void* location, const ObjHeader* object) {
+    mm::RefFieldAccessor{HeapRefSlot(location)}.storeAtomic(const_cast<ObjHeader*>(object), std::memory_order_seq_cst);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(CompareAndSwapVolatileHeapRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(CompareAndSwapVolatileHeapRef, void* location, ObjHeader* expectedValue, ObjHeader* newValue) {
     ObjHeader* actual = expectedValue;
-    mm::RefAccessor<false>{location}.compareAndExchange(actual, newValue, std::memory_order_seq_cst);
+    mm::RefFieldAccessor{HeapRefSlot(location)}.compareAndExchange(actual, newValue, std::memory_order_seq_cst);
     RETURN_OBJ(actual);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW bool CompareAndSetVolatileHeapRef(ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
-    return mm::RefAccessor<false>{location}.compareAndExchange(expectedValue, newValue, std::memory_order_seq_cst);
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW bool CompareAndSetVolatileHeapRef(void* location, ObjHeader* expectedValue, ObjHeader* newValue) {
+    return mm::RefFieldAccessor{HeapRefSlot(location)}.compareAndExchange(expectedValue, newValue, std::memory_order_seq_cst);
 }
 
-extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(GetAndSetVolatileHeapRef, ObjHeader** location, ObjHeader* newValue) {
-    RETURN_OBJ(mm::RefAccessor<false>{location}.exchange(newValue, std::memory_order_seq_cst));
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(GetAndSetVolatileHeapRef, void* location, ObjHeader* newValue) {
+    RETURN_OBJ(mm::RefFieldAccessor{HeapRefSlot(location)}.exchange(newValue, std::memory_order_seq_cst));
+}
+
+// Kore: volatile static fields (full pointers), see above.
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateVolatileStaticRef(ObjHeader** location, const ObjHeader* object) {
+    mm::GlobalRefAccessor{location}.storeAtomic(const_cast<ObjHeader*>(object), std::memory_order_seq_cst);
+}
+
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(CompareAndSwapVolatileStaticRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
+    ObjHeader* actual = expectedValue;
+    mm::GlobalRefAccessor{location}.compareAndExchange(actual, newValue, std::memory_order_seq_cst);
+    RETURN_OBJ(actual);
+}
+
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW bool CompareAndSetVolatileStaticRef(ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
+    return mm::GlobalRefAccessor{location}.compareAndExchange(expectedValue, newValue, std::memory_order_seq_cst);
+}
+
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW OBJ_GETTER(GetAndSetVolatileStaticRef, ObjHeader** location, ObjHeader* newValue) {
+    RETURN_OBJ(mm::GlobalRefAccessor{location}.exchange(newValue, std::memory_order_seq_cst));
 }
 
 extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateReturnRef(ObjHeader** returnSlot, const ObjHeader* object) {
@@ -476,4 +497,14 @@ void kotlin::initObjectPool() noexcept {
 
 void kotlin::compactObjectPoolInCurrentThread() noexcept {
     alloc::compactObjectPoolInCurrentThread();
+}
+
+// Kore: compressed references (docs/kore/gc-redesign.md, phase 3). Called by module constructors before `main`: writes
+// the references in permanent objects, given as `count` (32-bit slot, object) pairs, relative to the heap base.
+extern "C" RUNTIME_NOTHROW void Kotlin_applyCompressedRefFixups(void* const* pairs, int32_t count) {
+    alloc::initCompressedRefsBase();
+    for (int32_t i = 0; i < count; ++i) {
+        auto* slot = static_cast<uint32_t*>(pairs[2 * i]);
+        *slot = encodeRef(static_cast<const ObjHeader*>(pairs[2 * i + 1]));
+    }
 }

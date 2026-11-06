@@ -6,6 +6,8 @@
 package org.jetbrains.kotlin.backend.konan.llvm
 
 import kotlinx.cinterop.cValuesOf
+import kotlinx.cinterop.toCValues
+import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.ir.declarations.IrClass
@@ -43,6 +45,25 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
         } else {
             llvm.constInt32(length)
         }
+    }
+
+    // Kore: compressed references (docs/kore/gc-redesign.md, phase 3). References in permanent objects are offsets from a base
+    // known at run time only: they are emitted as 0 and written at startup from these (slot, object) pairs.
+    val compressedRefFixups = mutableListOf<Pair<ConstPointer, ConstValue>>()
+
+    private fun isNullConstant(value: ConstValue) = LLVMIsNull(value.llvm) != 0
+
+    // A writable permanent object whose reference slots at `fixups` (indices into `value` after the leading 0) are
+    // written at startup.
+    private fun createFixedUpConstant(value: ConstValue, fixups: List<Pair<List<Int>, ConstValue>>): ConstPointer {
+        val global = placeGlobal("", value)
+        global.setUnnamedAddr(true)
+        for (fixup in fixups) {
+            val gepIndices = (listOf(0) + fixup.first).map { llvm.int32(it) }
+            val slot = LLVMConstGEP2(value.llvmType, global.pointer.llvm, gepIndices.toCValues(), gepIndices.size)!!
+            compressedRefFixups += constPointer(slot) to fixup.second
+        }
+        return global.pointer.getElementPtr(llvm, global.type, 0)
     }
 
     private fun createConstant(value: ConstValue): ConstPointer {
@@ -86,12 +107,26 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
 
     fun createConstKotlinArray(arrayClass: IrClass, elements: List<ConstValue>): ConstPointer {
         val arrayHeader = arrayHeader(arrayClass.typeInfoPtr, elements.size)
+        if (llvm.compressedRefs && arrayClass.symbol == context.irBuiltIns.arrayClass && elements.isNotEmpty()) {
+            val value = llvm.struct(arrayHeader, ConstArray(llvm.int32Type, elements.map { llvm.constInt32(0) }))
+            return createFixedUpConstant(value, elements.mapIndexedNotNull { index, element -> (listOf(1, index) to element).takeUnless { isNullConstant(element) } })
+        }
         // (use [0 x i8] as body if there are no elements)
         val arrayBody = ConstArray(elements.firstOrNull()?.llvmType ?: llvm.int8Type, elements)
         return createConstant(llvm.struct(arrayHeader, arrayBody))
     }
 
     fun createConstKotlinObject(type: IrClass, vararg fields: ConstValue): ConstPointer {
+        if (llvm.compressedRefs) {
+            val layout = context.getLayoutBuilder(type).getFields(llvm)
+            if (layout.size == fields.size && layout.any { it.type.binaryTypeIsReference() }) {
+                val values = fields.mapIndexed { index, field -> if (layout[index].type.binaryTypeIsReference()) llvm.constInt32(0) else field }
+                val fixups = fields.indices.mapNotNull { index ->
+                    (listOf(index + 1) to fields[index]).takeIf { layout[index].type.binaryTypeIsReference() && !isNullConstant(fields[index]) }
+                }
+                return createFixedUpConstant(llvm.struct(objHeader(type.typeInfoPtr), *values.toTypedArray()), fixups)
+            }
+        }
         return createConstant(createConstKotlinObjectBody(type, *fields))
     }
 

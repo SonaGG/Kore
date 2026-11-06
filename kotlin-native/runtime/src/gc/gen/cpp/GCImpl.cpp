@@ -246,10 +246,10 @@ void markArraySlice(void* state, ArrayHeader* array, uint32_t begin, uint32_t en
         for (uint32_t i = begin; i < end; ++i) rescanRememberedHolder(markQueue, (*gRememberedHolders)[i]);
         return;
     }
-    ObjHeader** slots = ArrayAddressOfElementAt(array, 0);
+    HeapRefSlot slots = ArrayAddressOfElementAt(array, 0);
     bool recordSlots = recordingNurserySlots();
     for (uint32_t i = begin; i < end; ++i) {
-        if (recordSlots) recordIfMovable(slots + i);
+        if (recordSlots) recordIfMovable(static_cast<ObjHeader**>((slots + i).address()));
         ObjHeader* element = mm::RefFieldAccessor(slots + i).direct();
         if (element != nullptr && element->heap()) MarkTraits::tryEnqueue(markQueue, element);
     }
@@ -456,8 +456,8 @@ void verifyOldToYoungRemembered(alloc::Allocator& allocator, const gc::internal:
         ++checked;
         if (objects.count(holder) != 0) return;
         traverseObjectFields(holder, [&](auto accessor) {
-            ObjHeader** slot = accessor.direct().location();
-            ObjHeader* value = *slot;
+            ObjHeader** slot = static_cast<ObjHeader**>(accessor.direct().address());
+            ObjHeader* value = accessor.direct().load();
             if (value == nullptr || !value->heap() || gc::objectBits(value).oldOrSurviving()) return;
             if (slots.count(slot) != 0) return;
             konan::consoleErrorf(
@@ -487,8 +487,8 @@ void verifyBeforeYoungMark(alloc::Allocator& allocator, const gc::internal::Reme
     auto checkHolder = [&](ObjHeader* holder) {
         auto data = gc::objectBits(holder);
         traverseObjectFields(holder, [&](auto accessor) {
-            ObjHeader** slot = accessor.direct().location();
-            ObjHeader* value = *slot;
+            ObjHeader** slot = static_cast<ObjHeader**>(accessor.direct().address());
+            ObjHeader* value = accessor.direct().load();
             if (value == nullptr) return;
             if (alloc::nursery::inFreeBlock(value)) fail("stale field", holder, slot, value);
             if (data.old() && alloc::nursery::movable(value) && objects.count(holder) == 0 && slots.count(slot) == 0) {
@@ -743,7 +743,7 @@ void gc::internal::GenerationalGC::markRememberedSet(
             ++slotOwnerTypes[owner->type_info()];
         }
         if (!gc::objectBits(owner).old()) return;
-        ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
+        ObjHeader* value = HeapRefSlot(slot).loadAtomic(std::memory_order_relaxed);
         if (value != nullptr && value->heap()) {
             MarkTraits::tryEnqueue(markQueue, value);
         }
@@ -766,7 +766,7 @@ void gc::internal::GenerationalGC::markRememberedSet(
             if (!alloc::nursery::inRetainedBlock(slot)) continue;
             ObjHeader* owner = alloc::nursery::retainedObjectContaining(reinterpret_cast<uintptr_t>(slot));
             if (owner == nullptr || !gc::objectBits(owner).old()) continue;
-            ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
+            ObjHeader* value = HeapRefSlot(slot).loadAtomic(std::memory_order_relaxed);
             if (value != nullptr && value->heap()) MarkTraits::tryEnqueue(markQueue, value);
             if (recordingNurserySlots()) recordIfMovable(slot);
         }
@@ -974,7 +974,7 @@ PERFORMANCE_INLINE void gc::GC::processObjectInMark(void* state, ObjHeader* obje
         });
     }
     if (__builtin_expect(recordingNurserySlots(), false)) {
-        traverseClassObjectFields(object, [](auto accessor) noexcept { recordIfMovable(accessor.direct().location()); });
+        traverseClassObjectFields(object, [](auto accessor) noexcept { recordIfMovable(static_cast<ObjHeader**>(accessor.direct().address())); });
     }
     gc::internal::processObjectInMark<MarkTraits>(state, object);
 }
@@ -1004,7 +1004,7 @@ PERFORMANCE_INLINE void gc::GC::processArrayInMark(void* state, ArrayHeader* arr
         return;
     }
     if (__builtin_expect(recordingNurserySlots(), false)) {
-        traverseArrayOfObjectsElements(array, [](auto accessor) noexcept { recordIfMovable(accessor.direct().location()); });
+        traverseArrayOfObjectsElements(array, [](auto accessor) noexcept { recordIfMovable(static_cast<ObjHeader**>(accessor.direct().address())); });
     }
     gc::internal::processArrayInMark<MarkTraits>(state, array);
 }
@@ -1053,7 +1053,7 @@ void gc::GC::onEpochFinalized(int64_t epoch) noexcept {
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {
     barriers::beforeHeapRefUpdate(ref, value, loadAtomic);
     if (__builtin_expect(isYoungHeapObject(value), false)) {
-        rememberSlot(ref.location());
+        rememberSlot(static_cast<ObjHeader**>(ref.address()));
     }
 }
 
@@ -1090,24 +1090,26 @@ NO_INLINE void gc::rememberOldHolderIfYoungValue(ObjHeader* holder, ObjHeader* v
 
 // Copying references between arrays (e.g. growing an ArrayList): outside of a concurrent mark only old->young edges need
 // recording, and one remembered holder covers all of them.
-void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept {
+void gc::copyHeapRefsInObject(ObjHeader* holder, HeapRefSlot destination, HeapRefSlot source, size_t count) noexcept {
     if (__builtin_expect(barriers::markClosureBarriersEnabled(), false)) {
-        if (destination <= source) {
+        if (destination.address() <= source.address()) {
             for (size_t i = 0; i < count; ++i) {
                 mm::DirectRefAccessor ref{destination + i};
-                beforeHeapRefUpdateInObject(holder, ref, source[i]);
-                ref.store(source[i]);
+                ObjHeader* value = (source + i).load();
+                beforeHeapRefUpdateInObject(holder, ref, value);
+                ref.store(value);
             }
         } else {
             for (size_t i = count; i > 0; --i) {
-                mm::DirectRefAccessor ref{destination + i - 1};
-                beforeHeapRefUpdateInObject(holder, ref, source[i - 1]);
-                ref.store(source[i - 1]);
+                mm::DirectRefAccessor ref{destination + (i - 1)};
+                ObjHeader* value = (source + (i - 1)).load();
+                beforeHeapRefUpdateInObject(holder, ref, value);
+                ref.store(value);
             }
         }
         return;
     }
-    kotlin::moveMemory(destination, source, count * sizeof(ObjHeader*));
+    kotlin::moveMemory(destination.address(), source.address(), count * heapRefSize());
     if (!holder->heap()) return;
     auto holderData = gc::objectBits(holder);
     if (!holderData.oldOrSurviving()) return;
@@ -1120,8 +1122,9 @@ void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHea
         return;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (isYoungHeapObject(destination[i])) {
-            rememberIfOldToYoung(holder, destination[i]);
+        ObjHeader* value = (destination + i).load();
+        if (isYoungHeapObject(value)) {
+            rememberIfOldToYoung(holder, value);
             return;
         }
     }

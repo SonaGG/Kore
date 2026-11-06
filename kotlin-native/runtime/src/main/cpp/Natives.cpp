@@ -76,7 +76,7 @@ OBJ_GETTER(Kotlin_getStackTraceStrings, KConstRef stackTrace) {
     for (size_t index = 0; index < stackTraceStrings.size(); ++index) {
         ObjHolder holder;
         CreateStringFromCString(stackTraceStrings[index].c_str(), holder.slot());
-        UpdateHeapRefInObject(strings, ArrayAddressOfElementAt(strings->array(), index), holder.obj());
+        UpdateHeapRefInObject(strings, ArrayAddressOfElementAt(strings->array(), index).address(), holder.obj());
     }
 
     RETURN_OBJ(strings);
@@ -118,10 +118,10 @@ void Kotlin_CPointer_CopyMemory(KNativePtr to, KNativePtr from, KInt count) {
   memcpy(to, from, count);
 }
 
-RUNTIME_NOTHROW RUNTIME_PURE KRef* Kotlin_arrayGetElementAddress(KRef array, KInt index) {
+RUNTIME_NOTHROW RUNTIME_PURE void* Kotlin_arrayGetElementAddress(KRef array, KInt index) {
     ArrayHeader* arr = array->array();
     RuntimeAssert(index >= 0 && static_cast<uint32_t>(index) < arr->count_, "Index %" PRId32 " must be in [0, %" PRIu32 ")", index, static_cast<uint32_t>(arr->count_)); 
-    return ArrayAddressOfElementAt(arr, index);
+    return ArrayAddressOfElementAt(arr, index).address();
 }
 
 RUNTIME_NOTHROW RUNTIME_PURE KInt* Kotlin_intArrayGetElementAddress(KRef array, KInt index) {

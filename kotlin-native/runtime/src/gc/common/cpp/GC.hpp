@@ -105,7 +105,7 @@ void rememberOldHolderIfYoungValue(ObjHeader* holder, ObjHeader* value) noexcept
 void afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept;
 // Kore: copies `count` references from `source` to the slots at `destination` (which may overlap, like `memmove`), all
 // belonging to `holder`, as `count` stores with `beforeHeapRefUpdateInObject` would.
-void copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept;
+void copyHeapRefsInObject(ObjHeader* holder, HeapRefSlot destination, HeapRefSlot source, size_t count) noexcept;
 OBJ_GETTER(weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 
 bool isMarked(ObjHeader* object) noexcept;

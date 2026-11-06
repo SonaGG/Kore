@@ -543,6 +543,23 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     val CompareAndSetVolatileHeapRef by lazy { importRtFunction("CompareAndSetVolatileHeapRef", false) }
     val CompareAndSwapVolatileHeapRef by lazy { importRtFunction("CompareAndSwapVolatileHeapRef", true) }
     val GetAndSetVolatileHeapRef by lazy { importRtFunction("GetAndSetVolatileHeapRef", true) }
+    // Kore: compressed references (docs/kore/gc-redesign.md, phase 3): volatile static fields keep full pointers.
+    val UpdateVolatileStaticRef by lazy { importRtFunction("UpdateVolatileStaticRef", false) }
+    val CompareAndSetVolatileStaticRef by lazy { importRtFunction("CompareAndSetVolatileStaticRef", false) }
+    val CompareAndSwapVolatileStaticRef by lazy { importRtFunction("CompareAndSwapVolatileStaticRef", true) }
+    val GetAndSetVolatileStaticRef by lazy { importRtFunction("GetAndSetVolatileStaticRef", true) }
+    val Kotlin_applyCompressedRefFixups by lazy { importRtFunction("Kotlin_applyCompressedRefFixups", false) }
+
+    // Kore: whether reference fields of objects and `Array` elements are 32-bit, and the base they are relative to (the
+    // runtime's `Kotlin_heapBase`, an address).
+    val compressedRefs: Boolean = context.config.compressedRefs
+    val heapBaseGlobal by lazy {
+        LLVMGetNamedGlobal(module, "Kotlin_heapBase") ?: LLVMAddGlobal(module, pointerType, "Kotlin_heapBase")!!.also {
+            LLVMSetLinkage(it, LLVMLinkage.LLVMExternalLinkage)
+        }
+    }
+    // The LLVM type of a reference stored in an object (a field or an `Array` element).
+    val heapRefType: LLVMTypeRef get() = if (compressedRefs) int32Type else pointerType
 
     // TODO: Consider implementing them directly in the code generator.
     val Kotlin_arrayGetElementAddress by lazy { importRtFunction("Kotlin_arrayGetElementAddress", false) }

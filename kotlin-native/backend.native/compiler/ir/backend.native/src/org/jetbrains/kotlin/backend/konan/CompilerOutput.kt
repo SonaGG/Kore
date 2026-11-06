@@ -236,6 +236,26 @@ private fun linkAllDependencies(generationState: NativeGenerationState, generate
         }
     }
     precompiledRuntime?.preserveImports(generationState.llvmModule)
+    if (generationState.config.compressedRefs) markHeapBaseLoadsInvariant(generationState.llvmModule)
+}
+
+// Kore: compressed references (docs/kore/gc-redesign.md, phase 3). The heap base is set once at startup, before any code
+// that decodes references runs: its plain loads, in compiled code and in the runtime alike, can be hoisted out of loops
+// and across calls. (The runtime reads it atomically where it is set.)
+private fun markHeapBaseLoadsInvariant(module: LLVMModuleRef) {
+    val global = LLVMGetNamedGlobal(module, "Kotlin_heapBase") ?: return
+    val context = LLVMGetModuleContext(module)
+    val kind = LLVMGetMDKindIDInContext(context, "invariant.load", "invariant.load".length)
+    val emptyNode = LLVMMDNodeInContext2(context, null, 0)
+    var use = LLVMGetFirstUse(global)
+    while (use != null) {
+        val user = LLVMGetUser(use)
+        if (user != null && LLVMIsALoadInst(user) != null && LLVMGetVolatile(user) == 0 &&
+                LLVMGetOrdering(user) == LLVMAtomicOrdering.LLVMAtomicOrderingNotAtomic) {
+            LLVMSetMetadata(user, kind, LLVMMetadataAsValue(context, emptyNode))
+        }
+        use = LLVMGetNextUse(use)
+    }
 }
 
 internal fun insertAliasToEntryPoint(context: NativeBackendPhaseContext, module: LLVMModuleRef) {

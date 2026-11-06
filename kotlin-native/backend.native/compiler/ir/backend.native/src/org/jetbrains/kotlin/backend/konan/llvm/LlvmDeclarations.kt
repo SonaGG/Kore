@@ -98,8 +98,11 @@ internal data class ClassBodyAndAlignmentInfo(
 
 private fun ContextUtils.createClassBody(name: String, fields: List<ClassLayoutBuilder.FieldInfo>): ClassBodyAndAlignmentInfo {
     val classType = LLVMStructCreateNamed(LLVMGetModuleContext(llvm.module), name)!!
+    // Kore: reference fields are 32-bit with compressed references.
+    fun fieldType(field: ClassLayoutBuilder.FieldInfo) =
+            if (llvm.compressedRefs && field.type.binaryTypeIsReference()) llvm.int32Type else field.type.toLLVMType(llvm)
     val packed = context.config.packFields ||
-        fields.any { LLVMABIAlignmentOfType(runtime.targetData, it.type.toLLVMType(llvm)) != it.alignment }
+        fields.any { LLVMABIAlignmentOfType(runtime.targetData, fieldType(it)) != it.alignment }
     val alignment = maxOf(runtime.objectAlignment, fields.maxOfOrNull { it.alignment } ?: 0)
     val indices = mutableMapOf<IrFieldSymbol, Int>()
 
@@ -120,7 +123,7 @@ private fun ContextUtils.createClassBody(name: String, fields: List<ClassLayoutB
                 require(currentOffset % field.alignment == 0L)
             }
             indices[field.irFieldSymbol] = this.size
-            addAndCount(field.type.toLLVMType(llvm))
+            addAndCount(fieldType(field))
         }
     }
     LLVMStructSetBody(classType, fieldTypes.toCValues(), fieldTypes.size, if (packed) 1 else 0)

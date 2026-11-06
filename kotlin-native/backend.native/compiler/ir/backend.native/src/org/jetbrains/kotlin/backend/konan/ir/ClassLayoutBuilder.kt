@@ -292,7 +292,9 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
     private fun IrField.toFieldInfo(llvm: CodegenLlvmHelpers): FieldInfo {
         val isConst = correspondingPropertySymbol?.owner?.isConst ?: false
         require(!isConst || initializer?.expression is IrConst) { "A const val field ${render()} must have constant initializer" }
-        return FieldInfo(name.asString(), type, isConst, symbol, requiredAlignment(llvm))
+        // Kore: reference fields are 32-bit with compressed references (docs/kore/gc-redesign.md, phase 3).
+        val alignment = if (llvm.compressedRefs && type.binaryTypeIsReference()) 4 else requiredAlignment(llvm)
+        return FieldInfo(name.asString(), type, isConst, symbol, alignment)
     }
 
     val vtableEntries: List<OverriddenFunctionInfo> by lazy {

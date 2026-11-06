@@ -48,8 +48,9 @@ public:
     size_t committedBytes() const noexcept;
     size_t retainedFreeBytes() const noexcept;
 
-private:
     HeapReservation(uint8_t* base, size_t bytes) noexcept;
+
+private:
 
     using Page = uint32_t;
 

@@ -18,6 +18,7 @@
 
 #include <string>
 
+#include "CompressedRefs.hpp"
 #include "Memory.h"
 #include "KString.h"
 #include "WritableTypeInfo.hpp"
@@ -53,7 +54,7 @@ RUNTIME_NOTHROW int Kotlin_internal_reflect_getObjectReferenceFieldsCount(ObjHea
 }
 
 RUNTIME_NOTHROW OBJ_GETTER(Kotlin_internal_reflect_getObjectReferenceFieldByIndex, ObjHeader* object, int index) {
-    RETURN_OBJ(*reinterpret_cast<ObjHeader**>(reinterpret_cast<uintptr_t>(object) + object->type_info()->objOffsets_[index]));
+    RETURN_OBJ(kotlin::HeapRefSlot(reinterpret_cast<uint8_t*>(object) + object->type_info()->objOffsets_[index]).load());
 }
 
 RUNTIME_NOTHROW OBJ_GETTER(Kotlin_native_internal_reflect_objCNameOrNull, const TypeInfo* typeInfo) {

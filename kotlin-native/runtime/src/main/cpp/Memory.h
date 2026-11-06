@@ -236,7 +236,7 @@ void RegisterGlobal(ObjHeader** location) RUNTIME_NOTHROW;
 //
 
 // Zeroes heap location.
-void ZeroHeapRef(ObjHeader** location) RUNTIME_NOTHROW;
+void ZeroHeapRef(void* location) RUNTIME_NOTHROW;
 // Zeroes an array.
 void ZeroArrayRefs(ArrayHeader* array) RUNTIME_NOTHROW;
 // Zeroes stack location.
@@ -244,19 +244,26 @@ void ZeroStackRef(ObjHeader** location) RUNTIME_NOTHROW;
 // Updates stack location.
 void UpdateStackRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Updates heap/static data location.
-void UpdateHeapRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
+void UpdateHeapRef(void* location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Kore: updates a static field (global or thread-local) `location`. Same as UpdateHeapRef, for a location the GC scans as a root.
 void UpdateStaticRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Kore: updates a reference field or element `location` of `holder` (a heap, stack or permanent object). Same as
 // UpdateHeapRef, but lets the GC barrier use the holder (e.g. to skip stores into young objects).
-void UpdateHeapRefInObject(ObjHeader* holder, ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
+void UpdateHeapRefInObject(ObjHeader* holder, void* location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Kore: `count` UpdateHeapRefInObject stores copying `source` to `destination` (possibly overlapping), in bulk.
-void CopyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, uint32_t count) RUNTIME_NOTHROW;
+void CopyHeapRefsInObject(ObjHeader* holder, void* destination, const void* source, uint32_t count) RUNTIME_NOTHROW;
 // Updates volatile heap/static data location.
-void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
-OBJ_GETTER(CompareAndSwapVolatileHeapRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
-bool CompareAndSetVolatileHeapRef(ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
-OBJ_GETTER(GetAndSetVolatileHeapRef, ObjHeader** location, ObjHeader* newValue) RUNTIME_NOTHROW;
+void UpdateVolatileHeapRef(void* location, const ObjHeader* object) RUNTIME_NOTHROW;
+OBJ_GETTER(CompareAndSwapVolatileHeapRef, void* location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
+bool CompareAndSetVolatileHeapRef(void* location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
+OBJ_GETTER(GetAndSetVolatileHeapRef, void* location, ObjHeader* newValue) RUNTIME_NOTHROW;
+// Kore: the same for volatile static fields (full pointers, unlike heap slots with compressed references).
+void UpdateVolatileStaticRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
+OBJ_GETTER(CompareAndSwapVolatileStaticRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
+bool CompareAndSetVolatileStaticRef(ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) RUNTIME_NOTHROW;
+OBJ_GETTER(GetAndSetVolatileStaticRef, ObjHeader** location, ObjHeader* newValue) RUNTIME_NOTHROW;
+// Kore: compressed references: writes the references of permanent objects at startup (see Memory.cpp).
+void Kotlin_applyCompressedRefFixups(void* const* pairs, int32_t count) RUNTIME_NOTHROW;
 
 // Updates location if it is null, atomically.
 // Updates reference in return slot.

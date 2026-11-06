@@ -156,7 +156,7 @@ internal class RTTIGenerator(
     }
 
     private val arrayClasses = mapOf(
-            IdSignatureValues.array to llvm.pointerType,
+            IdSignatureValues.array to llvm.heapRefType, // Kore: 32-bit elements with compressed references.
             primitiveArrayTypesSignatures[PrimitiveType.BYTE] to llvm.int8Type,
             primitiveArrayTypesSignatures[PrimitiveType.CHAR] to llvm.int16Type,
             primitiveArrayTypesSignatures[PrimitiveType.SHORT] to llvm.int16Type,

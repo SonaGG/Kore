@@ -223,12 +223,13 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
         SET(1)
     }
 
-    private fun FunctionGenerationContext.emitCmpExchange(callSite: IrCall, args: List<LLVMValueRef>, mode: CmpExchangeMode, resultSlot: LLVMValueRef?): LLVMValueRef {
+    private fun FunctionGenerationContext.emitCmpExchange(callSite: IrCall, args: List<LLVMValueRef>, mode: CmpExchangeMode, resultSlot: LLVMValueRef?, isStatic: Boolean = false): LLVMValueRef {
         require(args.size == 3) { "The call to ${callSite.symbol.owner.name.asString()} expects 3 value arguments." }
         return if (callSite.symbol.owner.parameters.last().type.binaryTypeIsReference()) {
+            // Kore: static fields keep full pointers (unlike object fields and array elements with compressed references).
             when (mode) {
-                CmpExchangeMode.SET -> call(llvm.CompareAndSetVolatileHeapRef, args)
-                CmpExchangeMode.SWAP -> call(llvm.CompareAndSwapVolatileHeapRef, args,
+                CmpExchangeMode.SET -> call(if (isStatic) llvm.CompareAndSetVolatileStaticRef else llvm.CompareAndSetVolatileHeapRef, args)
+                CmpExchangeMode.SWAP -> call(if (isStatic) llvm.CompareAndSwapVolatileStaticRef else llvm.CompareAndSwapVolatileHeapRef, args,
                         environment.calculateLifetime(callSite), resultSlot = resultSlot)
             }
         } else {
@@ -242,11 +243,11 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
         }
     }
 
-    private fun FunctionGenerationContext.emitAtomicRMW(callSite: IrCall, args: List<LLVMValueRef>, op: LLVMAtomicRMWBinOp, resultSlot: LLVMValueRef?): LLVMValueRef {
+    private fun FunctionGenerationContext.emitAtomicRMW(callSite: IrCall, args: List<LLVMValueRef>, op: LLVMAtomicRMWBinOp, resultSlot: LLVMValueRef?, isStatic: Boolean = false): LLVMValueRef {
         require(args.size == 2) { "The call to ${callSite.symbol.owner.name.asString()} expects 2 value arguments." }
         return if (callSite.symbol.owner.parameters.last().type.binaryTypeIsReference()) {
             require(op == LLVMAtomicRMWBinOp.LLVMAtomicRMWBinOpXchg)
-            call(llvm.GetAndSetVolatileHeapRef, args,
+            call(if (isStatic) llvm.GetAndSetVolatileStaticRef else llvm.GetAndSetVolatileHeapRef, args,
                     environment.calculateLifetime(callSite), resultSlot = resultSlot)
         } else {
             LLVMBuildAtomicRMW(builder, op, args[0], args[1],
@@ -268,13 +269,13 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
     }
 
     private fun FunctionGenerationContext.emitCompareAndSet(callSite: IrCall, args: List<LLVMValueRef>): LLVMValueRef {
-        return emitCmpExchange(callSite, transformArgsForVolatile(callSite, args), CmpExchangeMode.SET, null)
+        return emitCmpExchange(callSite, transformArgsForVolatile(callSite, args), CmpExchangeMode.SET, null, isStatic = callSite.dispatchReceiver == null)
     }
     private fun FunctionGenerationContext.emitCompareAndSwap(callSite: IrCall, args: List<LLVMValueRef>, resultSlot: LLVMValueRef?): LLVMValueRef {
-        return emitCmpExchange(callSite, transformArgsForVolatile(callSite, args), CmpExchangeMode.SWAP, resultSlot)
+        return emitCmpExchange(callSite, transformArgsForVolatile(callSite, args), CmpExchangeMode.SWAP, resultSlot, isStatic = callSite.dispatchReceiver == null)
     }
     private fun FunctionGenerationContext.emitGetAndSet(callSite: IrCall, args: List<LLVMValueRef>, resultSlot: LLVMValueRef?): LLVMValueRef {
-        return emitAtomicRMW(callSite, transformArgsForVolatile(callSite, args), LLVMAtomicRMWBinOp.LLVMAtomicRMWBinOpXchg, resultSlot)
+        return emitAtomicRMW(callSite, transformArgsForVolatile(callSite, args), LLVMAtomicRMWBinOp.LLVMAtomicRMWBinOpXchg, resultSlot, isStatic = callSite.dispatchReceiver == null)
     }
     private fun FunctionGenerationContext.emitGetAndAdd(callSite: IrCall, args: List<LLVMValueRef>): LLVMValueRef {
         return emitAtomicRMW(callSite, transformArgsForVolatile(callSite, args), LLVMAtomicRMWBinOp.LLVMAtomicRMWBinOpAdd, null)
@@ -302,6 +303,12 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
     private fun FunctionGenerationContext.emitAtomicGetArrayElement(callSite: IrCall, args: List<LLVMValueRef>, resultSlot: LLVMValueRef?): LLVMValueRef {
         require(args.size == 2) { "The call to ${callSite.symbol.owner.name.asString()} expects 2 value arguments." }
         val address = arrayGetElementAddress(callSite, args[0], args[1])
+        if (llvm.compressedRefs && callSite.symbol.owner.returnType.binaryTypeIsReference()) {
+            // Kore: a 32-bit `Array` element (docs/kore/gc-redesign.md, phase 3).
+            val loaded = loadHeapRef(address, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingSequentiallyConsistent)
+            storeStackRef(loaded, resultSlot ?: alloca(llvm.pointerType, true))
+            return loaded
+        }
         return loadSlot(callSite.llvmReturnType, callSite.symbol.owner.returnType.binaryTypeIsReference(), address, isVar = true, resultSlot, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingSequentiallyConsistent)
     }
 

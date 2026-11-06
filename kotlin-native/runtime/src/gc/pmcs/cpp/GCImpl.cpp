@@ -94,8 +94,8 @@ PERFORMANCE_INLINE void gc::beforeStaticRefUpdate(mm::DirectRefAccessor ref, Obj
 ALWAYS_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {}
 
 // Kore: this GC has no barriers for stores into objects.
-void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHeader* const* source, size_t count) noexcept {
-    std::memmove(destination, source, count * sizeof(ObjHeader*));
+void gc::copyHeapRefsInObject(ObjHeader* holder, HeapRefSlot destination, HeapRefSlot source, size_t count) noexcept {
+    std::memmove(destination.address(), source.address(), count * heapRefSize());
 }
 
 PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {

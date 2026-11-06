@@ -21,6 +21,8 @@ std::atomic<size_t> allocatedBytesCounter = 0;
 
 void alloc::initObjectPool() noexcept {}
 
+void alloc::initCompressedRefsBase() noexcept {}
+
 void* alloc::allocateInObjectPool(size_t size) noexcept {
     // TODO: Check that alignment to kObjectAlignment is satisfied.
     void* result = ::calloc(1, size);

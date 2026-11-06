@@ -154,7 +154,7 @@ NO_INLINE void beforeHeapRefUpdateSlowPath(mm::DirectRefAccessor ref, ObjHeader*
 
 PERFORMANCE_INLINE void gc::barriers::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {
     auto phase = currentPhase();
-    BarriersLogDebug(phase, "Write *%p <- %p (%p overwritten)", ref.location(), value, ref.load());
+    BarriersLogDebug(phase, "Write *%p <- %p (%p overwritten)", ref.address(), value, ref.load());
     if (__builtin_expect(phase == BarriersPhase::kMarkClosure, false)) {
         beforeHeapRefUpdateSlowPath(ref, value, loadAtomic);
     }
