@@ -195,3 +195,35 @@ void alloc::destroyExtraObjectData(mm::ExtraObjectData& extraObject) noexcept {
 
 alloc::SweepState::SweepState(alloc::ObjectFactoryImpl& objectFactory, alloc::ExtraObjectDataFactory& extraObjectDataFactory) noexcept :
     extraObjectFactoryIterable_(extraObjectDataFactory.LockForIter()), objectFactoryIterable_(objectFactory.LockForIter()) {}
+
+// Kore: this allocator has no moving young generation (the nursery of the custom allocator): its interface is inert.
+bool alloc::nursery::enabled() noexcept { return false; }
+bool alloc::nursery::movable(const ObjHeader*) noexcept { return false; }
+void alloc::nursery::pin(const ObjHeader*) noexcept {}
+bool alloc::nursery::pinned(const ObjHeader*) noexcept { return false; }
+void alloc::nursery::setAllocationEnabled(bool) noexcept {}
+void alloc::nursery::retireAll() noexcept {}
+ObjHeader* alloc::nursery::movableObjectContaining(uintptr_t) noexcept { return nullptr; }
+void alloc::nursery::forEachMovableObject(const std::function<void(ObjHeader*)>&) noexcept {}
+void alloc::nursery::retain(const ObjHeader*) noexcept {}
+bool alloc::nursery::retaining(const void*) noexcept { return false; }
+void alloc::nursery::finishYoungCollection() noexcept {}
+bool alloc::nursery::inRetainedBlock(const void*) noexcept { return false; }
+bool alloc::nursery::inFreeBlock(const void*) noexcept { return false; }
+int alloc::nursery::releaseKind(const void*) noexcept { return 0; }
+size_t alloc::nursery::activeBlocks() noexcept { return 0; }
+ObjHeader* alloc::nursery::retainedObjectContaining(uintptr_t) noexcept { return nullptr; }
+void alloc::nursery::forEachRetainedObject(const std::function<void(ObjHeader*)>&) noexcept {}
+void alloc::nursery::releaseEmptyRetainedBlocks(const std::function<bool(ObjHeader*)>&) noexcept {}
+
+uint8_t* alloc::Allocator::allocateForEvacuation(size_t) noexcept {
+    RuntimeFail("No evacuation with this allocator");
+}
+
+void alloc::Allocator::finishEvacuation() noexcept {}
+
+namespace kotlin::alloc {
+// Debugging counters of the custom allocator's heap slot lookups (see the generational GC).
+size_t gLastSlowHeapSlots = 0;
+size_t gLastHeapRanges = 0;
+} // namespace kotlin::alloc
