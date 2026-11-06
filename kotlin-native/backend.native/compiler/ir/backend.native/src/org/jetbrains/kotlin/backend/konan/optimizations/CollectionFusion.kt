@@ -21,6 +21,8 @@ import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
+import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 import java.util.IdentityHashMap
 
 /**
@@ -40,7 +42,8 @@ import java.util.IdentityHashMap
  *
  * Runs on the whole program (closed world) before the DFG is built, so the analyses see the simplified loops.
  */
-internal class CollectionFusion(private val context: Context, private val module: IrModuleFragment) {
+internal class CollectionFusion(private val context: Context, private val module: IrModuleFragment,
+                                         private val fusion: Boolean, private val specialization: Boolean) {
     private val log = System.getProperty("kore.collectionFusion.log") != null || System.getenv("KORE_FUSION_LOG") != null
     private val dump = System.getenv("KORE_FUSION_DUMP")
     private var currentFunction: IrFunction? = null
@@ -60,7 +63,7 @@ internal class CollectionFusion(private val context: Context, private val module
         if (!hasListCreation(body)) return
         currentFunction = function
         var fused = 0
-        while (fused < 32) {
+        while (fusion && fused < 32) {
             val state = FunctionState(body)
             for (creation in state.creations) {
                 val uses = analyzeUses(state, creation, quiet = true) ?: continue
@@ -69,7 +72,15 @@ internal class CollectionFusion(private val context: Context, private val module
             if (state.creations.none { tryFuse(function, state, it) }) break
             ++fused
         }
-        if (fused > 0) foldBoxes(function, body)
+        var specialized = 0
+        if (specialization) {
+            while (specialized < 32) {
+                val state = FunctionState(body)
+                if (state.creations.none { trySpecialize(function, state, it) }) break
+                ++specialized
+            }
+        }
+        if (fused + specialized > 0) foldBoxes(function, body)
         if (dump != null && function.name.asString() == dump) println(function.dump())
     }
 
@@ -221,6 +232,7 @@ internal class CollectionFusion(private val context: Context, private val module
                 parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_CAST -> current = parent
                 parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_COERCION_TO_UNIT -> return true
                 parent is IrReturnableBlock || parent is IrInlinedFunctionBlock -> return parent.statements.lastOrNull() !== current
+                parent is IrBlockBody -> return true
                 parent is IrContainerExpression -> {
                     if (parent.statements.lastOrNull() !== current || parent.type.isUnit()) return true
                     current = parent
@@ -270,7 +282,7 @@ internal class CollectionFusion(private val context: Context, private val module
                 // Only as a statement: the result (always true) is not used.
                 val parent = state.parents[call]
                 val discarded = (parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_COERCION_TO_UNIT)
-                        || (parent is IrContainerExpression && parent !is IrReturnableBlock && parent.statements.lastOrNull() !== call)
+                        || (parent is IrContainerExpression && parent !is IrReturnableBlock && parent.statements.lastOrNull() !== call) || parent is IrBlockBody
                 if (!discarded) return false
                 uses.adds.add(call)
                 return true
@@ -289,12 +301,13 @@ internal class CollectionFusion(private val context: Context, private val module
     private fun isArrayListInit(function: IrSimpleFunction) =
             function.name.asString() == "<init>" && function.parentClassOrNull?.fqNameWhenAvailable?.asString() == "kotlin.collections.ArrayList"
 
-    private class IterationLoop(val container: IrContainerExpression, val iterator: IrVariable, val loop: IrWhileLoop,
-                                val body: IrContainerExpression, val element: IrVariable)
+    private class IterationLoop(val container: IrStatementContainer, val iterator: IrVariable, val loop: IrWhileLoop,
+                                val body: IrContainerExpression, val element: IrVariable, val next: IrCall)
 
-    // `val it = list.iterator(); while (it.hasNext()) { val element = it.next(); ... }`, with no other use of `it`.
+    // `val it = list.iterator(); while (it.hasNext()) { val element = it.next(); ... }`, with no other use of `it`. The
+    // element may be unboxed: `val element = unbox(it.next())`.
     private fun iterationLoop(state: FunctionState, iterator: IrVariable): IterationLoop? {
-        val container = state.parents[iterator] as? IrContainerExpression ?: return null
+        val container = state.parents[iterator] as? IrStatementContainer ?: return null
         val index = container.statements.indexOf(iterator)
         val loop = container.statements.getOrNull(index + 1) as? IrWhileLoop ?: return null
         if (state.gets[iterator]?.size != 2) return null
@@ -304,9 +317,12 @@ internal class CollectionFusion(private val context: Context, private val module
         val element = body.statements.firstOrNull() as? IrVariable ?: return null
         if (element.origin != IrDeclarationOrigin.FOR_LOOP_VARIABLE) return null
         var next = element.initializer
-        while (next is IrTypeOperatorCall && next.operator == IrTypeOperator.IMPLICIT_CAST) next = next.argument
+        while (next is IrTypeOperatorCall && next.operator == IrTypeOperator.IMPLICIT_CAST ||
+                next is IrCall && next.symbol.owner.isUnbox()) {
+            next = if (next is IrTypeOperatorCall) next.argument else (next as IrCall).arguments[0]
+        }
         if (next !is IrCall || next.symbol.owner.name.asString() != "next" || (next.arguments.getOrNull(0) as? IrGetValue)?.symbol != iterator.symbol) return null
-        return IterationLoop(container, iterator, loop, body, element)
+        return IterationLoop(container, iterator, loop, body, element, next)
     }
 
     // ---------------------------------------------------------------------------------------------------------------------
@@ -521,7 +537,7 @@ internal class CollectionFusion(private val context: Context, private val module
         while (current !== ancestor) {
             val parent = state.parents[current] ?: return false
             val ok = when (parent) {
-                is IrContainerExpression -> true
+                is IrContainerExpression, is IrBlockBody -> true
                 is IrVariable -> parent.initializer === current
                 is IrReturn -> parent.value === current && parent.returnTargetSymbol.owner is IrReturnableBlock
                 is IrTypeOperatorCall -> parent.operator == IrTypeOperator.IMPLICIT_CAST || parent.operator == IrTypeOperator.IMPLICIT_COERCION_TO_UNIT
@@ -545,12 +561,12 @@ internal class CollectionFusion(private val context: Context, private val module
         if (uses.adds.isEmpty() || uses.adds.size > 2) return reject("${uses.adds.size} adds")
         val iteration = iterationLoop(state, uses.iterators.single()) ?: return reject("unknown iteration")
         val init = uses.init!!
-        val creationContainer = state.parents[creation] as? IrContainerExpression ?: return false
+        val creationContainer = state.parents[creation] as? IrStatementContainer ?: return false
         if (state.parents[init] !== creationContainer ||
                 creationContainer.statements.indexOf(init) != creationContainer.statements.indexOf(creation) + 1) return reject("init")
 
         // K: the block whose statement Kp contains the adds and whose later statement Kc contains the consuming loop.
-        val k = state.lowestCommonAncestor(uses.adds + iteration.loop) as? IrContainerExpression ?: return reject("no common block")
+        val k = state.lowestCommonAncestor(uses.adds + iteration.loop) as? IrStatementContainer ?: return reject("no common block")
         val kp = state.childOn(k, uses.adds.first())!!
         if (uses.adds.any { state.childOn(k, it) !== kp }) return reject("adds in different statements")
         val kc = state.childOn(k, iteration.loop)!!
@@ -584,7 +600,7 @@ internal class CollectionFusion(private val context: Context, private val module
             while (true) {
                 val parent = state.parents[current]!!
                 if (parent === k) break
-                if (parent is IrContainerExpression) {
+                if (parent is IrStatementContainer) {
                     val statements = parent.statements
                     between.addAll(statements.subList(statements.indexOf(current) + 1, statements.size))
                 }
@@ -602,7 +618,7 @@ internal class CollectionFusion(private val context: Context, private val module
             while (true) {
                 val parent = state.parents[current]!!
                 if (parent === k) break
-                if (parent is IrContainerExpression) {
+                if (parent is IrStatementContainer) {
                     val statements = parent.statements
                     statements.subList(0, statements.indexOf(current)).forEach {
                         between.add(it)
@@ -683,21 +699,20 @@ internal class CollectionFusion(private val context: Context, private val module
 
         for (hint in uses.sizeHints) replaceChild(state.parents[hint]!!, hint, hint.arguments[1]!!.deepCopyWithSymbols(function))
         val hoistedInOrder = hoisted.sortedBy { state.order[it]!! }
-        for (variable in hoistedInOrder) (state.parents[variable] as IrContainerExpression).statements.remove(variable)
+        for (variable in hoistedInOrder) (state.parents[variable] as IrStatementContainer).statements.remove(variable)
         k.statements.addAll(k.statements.indexOf(kp), hoistedInOrder)
 
         iteration.container.statements.remove(iteration.iterator)
         iteration.container.statements.remove(iteration.loop)
         val element = iteration.element
         iteration.body.statements.removeAt(0)
-        element.initializer = null
         val consumerBody = IrBlockImpl(iteration.body.startOffset, iteration.body.endOffset, context.irBuiltIns.unitType)
         consumerBody.statements.add(element)
         consumerBody.statements.addAll(iteration.body.statements)
         iteration.body.statements.clear()
         uses.adds.forEachIndexed { index, add ->
             val replacement = if (index == uses.adds.lastIndex) consumerBody else consumerBody.deepCopyWithSymbols(function)
-            (replacement.statements[0] as IrVariable).initializer = add.arguments[1]!!
+            replaceNext(replacement.statements[0] as IrVariable, iteration.iterator, add.arguments[1]!!)
             val parent = state.parents[add]!!
             if (parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_COERCION_TO_UNIT)
                 replaceChild(state.parents[parent]!!, parent, replacement)
@@ -708,11 +723,19 @@ internal class CollectionFusion(private val context: Context, private val module
         // The list is no longer built. Its capacity is still evaluated, and checked.
         for (variable in uses.vars) variable.type = variable.type.makeNullable()
         creation.initializer = IrConstImpl.constNull(creation.startOffset, creation.endOffset, creation.type)
+        replaceChild(creationContainer, init, checkCapacity(function, init, creationCopy, initCopy))
+        return true
+    }
+
+    // Evaluates the capacity passed to [init], and throws like the original for a negative one.
+    private fun checkCapacity(function: IrFunction, init: IrCall, creationCopy: IrVariable, initCopy: IrCall,
+                              capacityVariable: ((IrVariable) -> Unit)? = null): IrExpression {
         val capacity = init.arguments.getOrNull(1)
-        val initReplacement: IrExpression = if (capacity == null || (((capacity as? IrConst)?.value as? Int) ?: -1) >= 0) {
-            IrBlockImpl(init.startOffset, init.endOffset, context.irBuiltIns.unitType)
-        } else context.createIrBuilder(function.symbol, init.startOffset, init.endOffset).irBlock(resultType = context.irBuiltIns.unitType) {
+        if (capacity == null || (((capacity as? IrConst)?.value as? Int) ?: -1) >= 0)
+            return IrBlockImpl(init.startOffset, init.endOffset, context.irBuiltIns.unitType)
+        return context.createIrBuilder(function.symbol, init.startOffset, init.endOffset).irBlock(resultType = context.irBuiltIns.unitType) {
             val value = irTemporary(capacity, nameHint = "capacity")
+            capacityVariable?.invoke(value)
             +irIfThen(context.irBuiltIns.unitType,
                     irCall(context.irBuiltIns.lessFunByOperandType[context.irBuiltIns.intClass]!!).apply {
                         arguments[0] = irGet(value)
@@ -726,14 +749,28 @@ internal class CollectionFusion(private val context: Context, private val module
                         }
                     })
         }
-        replaceChild(creationContainer, init, initReplacement)
-        return true
     }
+
+    // Replaces the `next()` call on [iterator] in the initializer of [element] with [value].
+    private fun replaceNext(element: IrVariable, iterator: IrVariable, value: IrExpression) {
+        var parent: IrElement = element
+        var current: IrExpression = element.initializer!!
+        while (true) {
+            when {
+                current is IrTypeOperatorCall -> { parent = current; current = current.argument }
+                current is IrCall && current.symbol.owner.isUnbox() -> { parent = current; current = current.arguments[0]!! }
+                else -> break
+            }
+        }
+        check(current is IrCall && (current.arguments[0] as? IrGetValue)?.symbol == iterator.symbol) { "CollectionFusion: no next() call" }
+        replaceChild(parent, current, value)
+    }
+
 
     private fun replaceChild(parent: IrElement, old: IrElement, new: IrElement) {
         val newExpression = new as IrExpression
         val replaced = when (parent) {
-            is IrContainerExpression -> parent.statements.indexOfFirst { it === old }.let { index ->
+            is IrStatementContainer -> parent.statements.indexOfFirst { it === old }.let { index ->
                 if (index >= 0) parent.statements[index] = newExpression
                 index >= 0
             }
@@ -761,6 +798,161 @@ internal class CollectionFusion(private val context: Context, private val module
     }
 
     // ---------------------------------------------------------------------------------------------------------------------
+    // Primitive lists.
+
+    private fun boxedType(expression: IrExpression): IrType? {
+        val call = expression as? IrCall ?: return null
+        if (!call.symbol.owner.isBox()) return null
+        return call.symbol.owner.parameters[0].type.takeIf { it.isPrimitiveType() }
+    }
+
+    // Whether [variable] is only unboxed to [type], directly or through copies.
+    private fun isOnlyUnboxed(state: FunctionState, variable: IrVariable, type: IrType): Boolean {
+        for (get in state.gets[variable].orEmpty()) {
+            var current: IrElement = get
+            var parent = state.parents[current]
+            while (parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_CAST) {
+                current = parent
+                parent = state.parents[current]
+            }
+            when {
+                parent is IrCall && parent.symbol.owner.isUnbox() && parent.arguments[0] === current
+                        && parent.symbol.owner.returnType.classOrNull == type.classOrNull -> {}
+                parent is IrVariable && parent.initializer === current && !parent.isVar -> if (!isOnlyUnboxed(state, parent, type)) return false
+                else -> return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * A local list of boxed primitives that is only filled and iterated, and whose elements are only unboxed, is backed by a
+     * growing primitive array instead: `add` stores the primitive, and the iterations read it. The elements' boxes are
+     * never seen, so their identity cannot be observed.
+     */
+    private fun trySpecialize(function: IrFunction, state: FunctionState, creation: IrVariable): Boolean {
+        val uses = analyzeUses(state, creation, quiet = true) ?: return false
+        if (uses.adds.isEmpty() || uses.iterators.isEmpty()) return false
+        val type = boxedType(uses.adds[0].arguments[1]!!) ?: return false
+        if (uses.adds.any { boxedType(it.arguments[1]!!)?.classOrNull != type.classOrNull }) return false
+        val arrayClass = context.irBuiltIns.primitiveArrayForType.entries.firstOrNull { it.key?.classOrNull == type.classOrNull }?.value
+                ?: return false
+        val iterations = uses.iterators.map { iterationLoop(state, it) ?: return false }
+        for (iteration in iterations) {
+            // Adding while iterating would throw.
+            if (uses.adds.any { state.isAncestor(iteration.loop, it) }) return false
+            var initializer = iteration.element.initializer!!
+            while (initializer is IrTypeOperatorCall) initializer = initializer.argument
+            if (initializer is IrCall && initializer.symbol.owner.isUnbox()) {
+                if (initializer.symbol.owner.returnType.classOrNull != type.classOrNull) return false
+            } else if (!isOnlyUnboxed(state, iteration.element, type)) return false
+        }
+        val init = uses.init!!
+        val creationContainer = state.parents[creation] as? IrStatementContainer ?: return false
+        if (state.parents[init] !== creationContainer ||
+                creationContainer.statements.indexOf(init) != creationContainer.statements.indexOf(creation) + 1) return false
+        if (log) println("CollectionFusion: ${function.fqNameWhenAvailable}: specialized ${creation.name} to ${arrayClass.owner.name}")
+
+        val symbols = context.symbols
+        val irBuiltIns = context.irBuiltIns
+        val arrayType = arrayClass.defaultType
+        val intPlus = irBuiltIns.intClass.functions.single {
+            it.owner.name.asString() == "plus" && it.owner.parameters.getOrNull(1)?.type?.isInt() == true
+        }
+        val intShr = irBuiltIns.intClass.functions.single { it.owner.name.asString() == "shr" }
+        val intLess = irBuiltIns.lessFunByOperandType[irBuiltIns.intClass]!!
+        val box = (uses.adds[0].arguments[1] as IrCall).symbol
+        val builder = context.createIrBuilder(function.symbol, creation.startOffset, creation.endOffset)
+        fun IrBuilderWithScope.allocate(size: IrExpression) = irCall(symbols.createUninitializedArray, arrayType, listOf(arrayType)).apply {
+            arguments[0] = size
+        }
+        fun IrBuilderWithScope.plus(a: IrExpression, b: IrExpression) = irCall(intPlus).apply {
+            arguments[0] = a
+            arguments[1] = b
+        }
+
+        // The array and the size, declared where the list is created.
+        val creationCopy = creation.deepCopyWithSymbols(function)
+        val initCopy = init.deepCopyWithSymbols(function)
+        var capacity: IrVariable? = null
+        val check = checkCapacity(function, init, creationCopy, initCopy) { capacity = it }
+        val initialCapacity: IrExpression = capacity?.let { builder.irGet(it) }
+                ?: (init.arguments.getOrNull(1)?.deepCopyWithSymbols(function) ?: builder.irInt(10))
+        val array = builder.scope.createTemporaryVariable(builder.allocate(initialCapacity), nameHint = "array", isMutable = true)
+        val size = builder.scope.createTemporaryVariable(builder.irInt(0), nameHint = "size", isMutable = true)
+        val initIndex = creationContainer.statements.indexOf(init)
+        creationContainer.statements.removeAt(initIndex)
+        creationContainer.statements.addAll(initIndex, listOf(check, array, size))
+
+        for (hint in uses.sizeHints) replaceChild(state.parents[hint]!!, hint, builder.irGet(size))
+
+        for (add in uses.adds) {
+            val value = (add.arguments[1] as IrCall).arguments[0]!!
+            val replacement = context.createIrBuilder(function.symbol, add.startOffset, add.endOffset).irBlock(resultType = irBuiltIns.unitType) {
+                val element = irTemporary(value, nameHint = "element")
+                // Grows like `ArrayList`, by half.
+                +irIfThen(irBuiltIns.unitType,
+                        irCall(irBuiltIns.booleanNotSymbol).apply {
+                            arguments[0] = irCall(intLess).apply {
+                                arguments[0] = irGet(size)
+                                arguments[1] = irCall(symbols.arraySize[arrayClass]!!).apply { arguments[0] = irGet(array) }
+                            }
+                        },
+                        irBlock(resultType = irBuiltIns.unitType) {
+                            val grown = irTemporary(allocate(plus(plus(irGet(size), irCall(intShr).apply {
+                                arguments[0] = irGet(size)
+                                arguments[1] = irInt(1)
+                            }), irInt(1))), nameHint = "grown")
+                            +irCall(symbols.copyInto[arrayClass]!!).apply {
+                                arguments[0] = irGet(array)
+                                arguments[1] = irGet(grown)
+                                arguments[2] = irInt(0)
+                                arguments[3] = irInt(0)
+                                arguments[4] = irGet(size)
+                            }
+                            +irSet(array, irGet(grown))
+                        })
+                +irCall(symbols.arraySet[arrayClass]!!).apply {
+                    arguments[0] = irGet(array)
+                    arguments[1] = irGet(size)
+                    arguments[2] = irGet(element)
+                }
+                +irSet(size, plus(irGet(size), irInt(1)))
+            }
+            val parent = state.parents[add]!!
+            if (parent is IrTypeOperatorCall && parent.operator == IrTypeOperator.IMPLICIT_COERCION_TO_UNIT)
+                replaceChild(state.parents[parent]!!, parent, replacement)
+            else
+                replaceChild(parent, add, replacement)
+        }
+
+        for (iteration in iterations) {
+            val loopBuilder = context.createIrBuilder(function.symbol, iteration.loop.startOffset, iteration.loop.endOffset)
+            val index = loopBuilder.scope.createTemporaryVariable(loopBuilder.irInt(0), nameHint = "index", isMutable = true)
+            iteration.container.statements[iteration.container.statements.indexOf(iteration.iterator)] = index
+            iteration.loop.condition = loopBuilder.irCall(intLess).apply {
+                arguments[0] = loopBuilder.irGet(index)
+                arguments[1] = loopBuilder.irGet(size)
+            }
+            val next = loopBuilder.irBlock(resultType = iteration.next.type) {
+                val current = irTemporary(irGet(index), nameHint = "current")
+                +irSet(index, plus(irGet(current), irInt(1)))
+                +irCall(box).apply {
+                    arguments[0] = irCall(symbols.arrayGet[arrayClass]!!).apply {
+                        arguments[0] = irGet(array)
+                        arguments[1] = irGet(current)
+                    }
+                }
+            }
+            replaceNext(iteration.element, iteration.iterator, next)
+        }
+
+        for (variable in uses.vars) variable.type = variable.type.makeNullable()
+        creation.initializer = IrConstImpl.constNull(creation.startOffset, creation.endOffset, creation.type)
+        return true
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------
     // Boxes.
 
     /**
@@ -768,6 +960,18 @@ internal class CollectionFusion(private val context: Context, private val module
      * to the same type: the variables then hold the primitive value. The identity of such boxes is unobservable.
      */
     private fun foldBoxes(function: IrFunction, body: IrBody) {
+        // `unbox(box(v))` is `v`.
+        body.transformChildrenVoid(object : IrElementTransformerVoid() {
+            override fun visitCall(expression: IrCall): IrExpression {
+                expression.transformChildrenVoid(this)
+                if (!expression.symbol.owner.isUnbox()) return expression
+                var argument = expression.arguments[0]!!
+                while (argument is IrTypeOperatorCall && argument.operator == IrTypeOperator.IMPLICIT_CAST) argument = argument.argument
+                val type = boxedType(argument) ?: return expression
+                if (expression.symbol.owner.returnType.classOrNull != type.classOrNull || !expression.type.isPrimitiveType()) return expression
+                return (argument as IrCall).arguments[0]!!
+            }
+        })
         val state = FunctionState(body)
         val candidates = ArrayList<IrVariable>()
         body.acceptVoid(object : IrVisitorVoid() {

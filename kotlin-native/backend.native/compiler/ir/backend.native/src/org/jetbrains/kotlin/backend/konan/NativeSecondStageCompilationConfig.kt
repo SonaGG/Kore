@@ -273,6 +273,10 @@ class NativeSecondStageCompilationConfig(
     val collectionFusion: Boolean
         get() = configuration.get(BinaryOptions.collectionFusion) ?: true
 
+    // Kore: see [org.jetbrains.kotlin.backend.konan.optimizations.CollectionFusion]: local lists of primitives backed by primitive arrays.
+    val primitiveLists: Boolean
+        get() = configuration.get(BinaryOptions.primitiveLists) ?: true
+
     // Kore: see [BinaryOptions.invariantTypeInfo].
     val invariantTypeInfo: Boolean
         get() = configuration.get(BinaryOptions.invariantTypeInfo) ?: true
