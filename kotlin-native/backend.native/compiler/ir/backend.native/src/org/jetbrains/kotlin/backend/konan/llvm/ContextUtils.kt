@@ -417,13 +417,22 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
         val char = type("omnipotent char", root)
         val int64Name = if ((target.family == Family.LINUX || target.family == Family.ANDROID) && runtime.pointerSize == 8)
             "long" else "long long"
+        // Kore: primitive fields are tagged as the only member of a struct of their own ("struct-path" tags, as clang does for
+        // C++ struct members). They still alias the scalar accesses of the runtime (and of each other), but not the elements
+        // of primitive arrays, which the runtime accesses as members of `KotlinArrayElement<T>`, nor array lengths
+        // (`ArrayHeader::count_`): storing to an Int field does not make LLVM reload an IntArray element or length, nor
+        // the other way around. References keep the scalar "any pointer" tag (the GC barriers access them as such).
+        fun fieldTag(scalar: LLVMValueRef, name: String): LLVMValueRef {
+            val struct = node(llvmContext, "kotlin.Field.$name".mdString(llvmContext), scalar, zero)!!
+            return node(llvmContext, struct, scalar, zero)!!
+        }
         mapOf(
                 pointerType to tag(type("any pointer", char)),
-                int16Type to tag(type("short", char)),
-                int32Type to tag(type("int", char)),
-                int64Type to tag(type(int64Name, char)),
-                floatType to tag(type("float", char)),
-                doubleType to tag(type("double", char)),
+                int16Type to fieldTag(type("short", char), "short"),
+                int32Type to fieldTag(type("int", char), "int"),
+                int64Type to fieldTag(type(int64Name, char), int64Name),
+                floatType to fieldTag(type("float", char), "float"),
+                doubleType to fieldTag(type("double", char), "double"),
         )
     }
     private val tbaaKind by lazy { LLVMGetMDKindIDInContext(llvmContext, "tbaa", 4) }
