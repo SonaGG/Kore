@@ -129,6 +129,8 @@ namespace {
 
 // Kore: number of helper threads for a young collection's mark, besides the GC thread.
 size_t youngMarkHelperCount() noexcept {
+    // `KORE_GC_HELPERS` overrides it, for experiments.
+    if (const char* helpers = std::getenv("KORE_GC_HELPERS")) return static_cast<size_t>(std::atoi(helpers));
     auto hardwareThreads = std::thread::hardware_concurrency();
     if (hardwareThreads <= 2) return 0;
     return std::min<size_t>(hardwareThreads / 2 - 1, 3);
@@ -197,9 +199,11 @@ void gc::mark::ConcurrentMark::runInParallel(const std::function<void()>& task) 
 }
 
 void gc::mark::ConcurrentMark::markYoungInSTW(
-        GCHandle gcHandle, const std::function<void(ParallelProcessor::Worker&)>& markRememberedSets) {
+        GCHandle gcHandle,
+        const std::function<void(ParallelProcessor::Worker&, std::vector<ObjHeader**>&)>& markRememberedSets) {
     std::unique_lock markLock(markMutex_);
     parallelProcessor_.construct();
+    parallelProcessor_->setExternalWork(&internal::markArraySlicesPending);
     {
         ParallelProcessor::Worker worker(*parallelProcessor_);
         // Helpers register their own workers and take batches the GC thread shares while it collects roots and marks.
@@ -208,8 +212,16 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
             ParallelProcessor::Worker helperWorker(*parallelProcessor_);
             Mark<MarkTraits>(gcHandle, helperWorker);
         });
-        collectRootSet<MarkTraits>(gcHandle, worker, [](mm::ThreadData&) { return true; });
-        markRememberedSets(worker);
+        // As `collectRootSet`, but the conservative stack candidates of all threads are looked up with the remembered
+        // set's slots.
+        MarkTraits::clear(worker);
+        std::vector<ObjHeader**> stackCandidates;
+        for (auto& thread : mm::GlobalData::Instance().threadRegistry().LockForIter()) {
+            thread.Publish();
+            collectRootSetForThread<MarkTraits>(gcHandle, worker, thread, &stackCandidates);
+        }
+        collectRootSetGlobals<MarkTraits>(gcHandle, worker);
+        markRememberedSets(worker, stackCandidates);
         Mark<MarkTraits>(gcHandle, worker);
     }
     waitHelpers();

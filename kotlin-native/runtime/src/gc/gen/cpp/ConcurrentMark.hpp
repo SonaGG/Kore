@@ -64,20 +64,41 @@ public:
 
         ALWAYS_INLINE static void clear(AnyQueue& queue) noexcept { RuntimeAssert(queue.localEmpty(), "Mark queue must be empty"); }
 
+        // Kore: slices of big arrays to mark (see `GC::processArrayInMark`), the external work of the parallel
+        // processor: any mark worker takes them before looking for other work, and instead of waiting for it.
+        static PERFORMANCE_INLINE bool arraySlicesPending() noexcept {
+            return internal::markArraySlicesPending.load(std::memory_order_relaxed) != 0;
+        }
+        NO_INLINE static void markArraySlices(MarkQueue& queue) noexcept;
+
         static PERFORMANCE_INLINE ObjHeader* tryDequeue(MarkQueue& queue) noexcept {
-            auto* obj = queue.tryPop();
-            if (obj) {
-                auto object = alloc::objectForObjectData(*obj);
-                RuntimeLogDebug({logging::Tag::kGCMark}, "Dequeued %p", object);
-                return object;
+            while (true) {
+                if (__builtin_expect(arraySlicesPending(), false)) markArraySlices(queue);
+                auto* obj = queue.tryPop();
+                if (obj) {
+                    auto object = alloc::objectForObjectData(*obj);
+                    RuntimeLogDebug({logging::Tag::kGCMark}, "Dequeued %p", object);
+                    return object;
+                }
+                // Null: the mark is done, or there are slices to take.
+                if (__builtin_expect(!arraySlicesPending(), true)) return nullptr;
             }
-            return nullptr;
         }
 
         static PERFORMANCE_INLINE bool tryEnqueue(AnyQueue& queue, ObjHeader* object) noexcept {
             auto& objectData = alloc::objectDataForObject(object);
             // Kore: a young collection stops at the old generation.
-            if (internal::isYoungCollection() && objectData.old()) return false;
+            if (internal::isYoungCollection()) {
+                if (objectData.old()) return false;
+                // Kore: objects without references (boxes, strings, primitive arrays) and without extra object data
+                // need no tracing: mark them without a trip through the queue, which halves the work of marking many
+                // small objects. Only in young collections, where the world is stopped (no extra object data appears
+                // concurrently).
+                auto* typeInfo = clearPointerBits(object->typeInfoOrMetaRelaxed(), OBJECT_TAG_MASK);
+                if (typeInfo->typeInfo_ == typeInfo && typeInfo->processObjectInMark == Kotlin_processEmptyObjectInMark) {
+                    return objectData.tryMark();
+                }
+            }
             bool pushed = queue.tryPush(objectData);
             if (pushed) {
                 RuntimeLogDebug({logging::Tag::kGCMark}, "Enqueued %p", object);
@@ -133,9 +154,12 @@ public:
     /** To be run by a single "main" GC thread during STW. */
     void markInSTW();
 
-    // Kore: young collection, entirely in STW and on the GC thread. `markRememberedSets(worker)` must enqueue the
-    // young objects referenced from the old generation.
-    void markYoungInSTW(GCHandle gcHandle, const std::function<void(ParallelProcessor::Worker&)>& markRememberedSets);
+    // Kore: young collection, entirely in STW and on the GC thread. `markRememberedSets(worker, stackCandidates)` must
+    // enqueue the young objects referenced from the old generation, and the heap objects the conservative stack
+    // candidates point into (one walk of the heap pages for both).
+    void markYoungInSTW(
+            GCHandle gcHandle,
+            const std::function<void(ParallelProcessor::Worker&, std::vector<ObjHeader**>&)>& markRememberedSets);
 
     ~ConcurrentMark();
 

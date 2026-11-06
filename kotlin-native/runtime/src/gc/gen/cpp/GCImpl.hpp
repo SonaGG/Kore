@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <optional>
@@ -30,10 +31,21 @@ struct RememberedSet {
     std::vector<ObjHeader**> slots;
     // Old objects that received a young object (holder-aware barrier). Each is logged once, see `ObjectData::kRemembered`.
     std::vector<ObjHeader*> objects;
+    // Kore: the slots recorded last, by hash: the same slots (atomic fields, globals) receive young objects again and
+    // again, and the young collection sorts the slots in its pause.
+    std::array<ObjHeader**, 64> recentSlots{};
+
+    void rememberSlot(ObjHeader** slot) noexcept {
+        auto& recent = recentSlots[(reinterpret_cast<uintptr_t>(slot) >> 3) % recentSlots.size()];
+        if (recent == slot) return;
+        recent = slot;
+        slots.push_back(slot);
+    }
 
     void clear() noexcept {
         slots.clear();
         objects.clear();
+        recentSlots.fill(nullptr);
     }
 
     void moveInto(RememberedSet& target) noexcept {
@@ -67,7 +79,9 @@ private:
     size_t initialFullCollectionThresholdBytes() const noexcept;
     void collectRememberedSets(RememberedSet& into) noexcept;
     void keepLiveRememberedSetEntries() noexcept;
-    void markRememberedSet(mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet) noexcept;
+    void markRememberedSet(
+            mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet,
+            std::vector<ObjHeader**>& stackCandidates) noexcept;
     // Kore: the moving young generation (world stopped).
     void pinNurseryRoots(std::vector<ObjHeader*>& stackReferenced) noexcept;
     void evacuateNursery() noexcept;

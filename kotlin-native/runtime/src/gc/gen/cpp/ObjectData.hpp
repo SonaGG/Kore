@@ -114,6 +114,8 @@ namespace internal {
 // finishes. A young collection neither marks old objects nor frees them.
 extern std::atomic<bool> youngCollection;
 inline bool isYoungCollection() noexcept { return youngCollection.load(std::memory_order_relaxed); }
+// Kore: the number of slices of big arrays waiting to be marked (see `GC::processArrayInMark`).
+extern std::atomic<size_t> markArraySlicesPending;
 } // namespace internal
 static_assert(sizeof(GC::ObjectData) == sizeof(void*));
 static_assert(kObjectAlignment >= 8, "mark queue links (object addresses) must leave the low 3 bits free");
