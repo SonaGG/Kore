@@ -32,6 +32,7 @@ extern "C" const int32_t Kotlin_fixedBlockPageSize;
 extern "C" const int32_t Kotlin_gcYoungGenerationSize; // Kore
 extern "C" const int32_t Kotlin_gcNurserySize; // Kore
 extern "C" const int32_t Kotlin_conservativeStacks; // Kore
+extern "C" const int32_t Kotlin_immix; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
 class SourceInfo;
@@ -97,6 +98,11 @@ ALWAYS_INLINE inline bool conservativeStacks() noexcept {
 // Kore: size of the moving young generation in MiB; 0 if there is none.
 ALWAYS_INLINE inline int32_t gcNurserySize() noexcept {
     return Kotlin_gcNurserySize;
+}
+
+// Kore: small and medium objects live in Immix blocks (alloc/custom ImmixBlock.hpp).
+ALWAYS_INLINE inline bool immix() noexcept {
+    return Kotlin_immix != 0;
 }
 ALWAYS_INLINE inline bool pagedAllocator() noexcept {
     return Kotlin_pagedAllocator != 0;

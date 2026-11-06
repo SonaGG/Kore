@@ -53,7 +53,8 @@ ObjHeader* objectAt(uint8_t* heapObject) noexcept {
 
 void alloc::Nursery::initialize() noexcept {
     auto mebibytes = compiler::gcNurserySize();
-    if (mebibytes <= 0 || instance_ != nullptr) return;
+    // Kore: no nursery with Immix blocks (the compiler passes 0 then; this covers the runtime tests).
+    if (mebibytes <= 0 || compiler::immix() || instance_ != nullptr) return;
     size_t blockCount = std::max<size_t>(static_cast<size_t>(mebibytes) * 1024 * 1024 / kBlockSize, 2);
     uint8_t* base = reserve(blockCount * kBlockSize);
     if (base == nullptr) return; // Run without a nursery.

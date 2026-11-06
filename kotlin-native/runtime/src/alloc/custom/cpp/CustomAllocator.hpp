@@ -10,8 +10,10 @@
 #include <cstring>
 
 #include "AllocationSize.hpp"
+#include "CompilerConstants.hpp"
 #include "ExtraObjectData.hpp"
 #include "Heap.hpp"
+#include "ImmixBlock.hpp"
 #include "Nursery.hpp"
 #include "NextFitPage.hpp"
 #include "Memory.h"
@@ -67,6 +69,24 @@ private:
     }
     NO_INLINE uint8_t* RefillNursery(size_t bytes) noexcept;
 
+    // Kore: memory v2. Bump allocation in the current hole of the thread's Immix block.
+    ALWAYS_INLINE uint8_t* AllocateInImmix(AllocationSize size) noexcept {
+        size_t bytes = size.inBytes();
+        uint8_t* top = immixCursor_;
+        if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
+            immixCursor_ = top + bytes;
+            ImmixBlock::MarkStart(top);
+            return top;
+        }
+        return AllocateInImmixSlowPath(size);
+    }
+    NO_INLINE uint8_t* AllocateInImmixSlowPath(AllocationSize size) noexcept;
+    uint8_t* AllocateInImmixOverflow(size_t bytes) noexcept;
+    uint8_t* AllocateLargerThanImmix(uint64_t cellCount) noexcept;
+    // Makes [start, end) the hole bumped through by `cursor` up to `limit`.
+    void TakeImmixHole(ImmixBlock* block, uint8_t* start, uint8_t* end, uint8_t*& cursor, uint8_t*& limit) noexcept;
+    void ResetImmix() noexcept;
+
     Heap& heap_;
     NextFitPage* nextFitPage_;
     FixedBlockPage* fixedBlockPages_[FixedBlockPage::MAX_BLOCK_SIZE + 1];
@@ -75,6 +95,14 @@ private:
     uint8_t* nurseryStart_ = nullptr;
     uint8_t* nurseryTop_ = nullptr;
     uint8_t* nurseryEnd_ = nullptr;
+    // Kore: Immix allocation (see ImmixBlock.hpp). Small objects go to holes of `immixBlock_`, medium objects that do
+    // not fit the current hole go to a separate overflow block (Immix "overflow allocation").
+    uint8_t* immixCursor_ = nullptr;
+    uint8_t* immixLimit_ = nullptr;
+    ImmixBlock* immixBlock_ = nullptr;
+    size_t immixNextLine_ = 0;
+    uint8_t* overflowCursor_ = nullptr;
+    uint8_t* overflowLimit_ = nullptr;
 };
 
 } // namespace kotlin::alloc
