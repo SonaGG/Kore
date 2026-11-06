@@ -181,7 +181,15 @@ namespace {
 // system calls and the page faults (and zeroing by the system) of fresh memory. Large blocks have size classes (four
 // per power of two), so that a block fits allocations of similar sizes.
 constexpr size_t kCachedBlockMinBytes = 64 * 1024;
-constexpr size_t kCachedBytesMax = 64 * 1024 * 1024;
+// The cache bound; `KORE_LARGE_BLOCK_CACHE_MB` overrides it.
+size_t cachedBytesMax() noexcept {
+    static const size_t value = [] {
+        if (const char* text = std::getenv("KORE_LARGE_BLOCK_CACHE_MB")) return static_cast<size_t>(std::strtoull(text, nullptr, 10)) * 1024 * 1024;
+        // 16 MiB: enough for the arrays a growing collection goes through, without keeping much memory resident.
+        return static_cast<size_t>(16) * 1024 * 1024;
+    }();
+    return value;
+}
 
 size_t blockSize(size_t size) noexcept {
     if (size < kCachedBlockMinBytes) return size;
@@ -264,7 +272,7 @@ void kotlin::alloc::Free(void* ptr, size_t size) noexcept {
         }
         block = it->second;
         cache.blockSizes.erase(it);
-        if (cache.bytes + block <= kCachedBytesMax) {
+        if (cache.bytes + block <= cachedBytesMax()) {
             cache.blocks[block].push_back(ptr);
             cache.bytes += block;
             return;
