@@ -110,7 +110,7 @@ public:
     TypeInfo* typeInfo() noexcept { return &typeInfo_; }
 
 private:
-    TypeInfo typeInfo_{};
+    alignas(kTypeInfoAlignment) TypeInfo typeInfo_{}; // Kore: see `Kotlin_objectHeaderFlagsMask`.
     std::vector<int32_t> objOffsets_;
 };
 

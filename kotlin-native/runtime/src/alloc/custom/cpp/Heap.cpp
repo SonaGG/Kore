@@ -79,7 +79,7 @@ void Heap::ForEachHeapSlot(
         uint8_t* block = ImmixBlock::Of(address)->StartAtOrBefore(address);
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
-        if (object->typeInfoOrMetaRelaxed() == nullptr) continue;
+        if (object->typeInfoOrMetaUntagged() == nullptr) continue;
         if (address >= block + ObjectSweepTraits::elementSize(block).inBytes()) continue;
         process(slot, object);
     }
@@ -113,7 +113,7 @@ void Heap::ForEachHeapSlot(
             auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
             // Free fixed blocks are zeroed (apart from free-list links stored in the GC header word), and a new single
             // object page may not have its object yet.
-            if (object->typeInfoOrMetaRelaxed() == nullptr) continue;
+            if (object->typeInfoOrMetaUntagged() == nullptr) continue;
             process(slot, object);
         }
     });

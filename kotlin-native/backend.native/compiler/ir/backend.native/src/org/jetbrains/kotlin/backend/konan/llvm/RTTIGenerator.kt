@@ -523,6 +523,7 @@ internal class RTTIGenerator(
         val vtable = vtable(superClass)
         val typeInfoWithVtableType = llvm.structType(runtime.typeInfoType, vtable.llvmType)
         val typeInfoWithVtableGlobal = staticData.createGlobal(typeInfoWithVtableType, "", isExported = false)
+        typeInfoWithVtableGlobal.setAlignment(TYPE_INFO_ALIGNMENT) // Kore: see `LlvmDeclarations`.
         val result = typeInfoWithVtableGlobal.pointer.getElementPtr(llvm, typeInfoWithVtableType, 0)
         val typeHierarchyInfo = if (!context.ghaEnabled())
             ClassGlobalHierarchyInfo.DUMMY

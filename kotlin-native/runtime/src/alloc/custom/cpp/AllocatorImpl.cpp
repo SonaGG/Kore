@@ -14,6 +14,9 @@
 
 using namespace kotlin;
 
+// Kore: meta objects are 32-byte aligned (`ExtraObjectCell`), so header bits 2-4 are free for the GC.
+extern "C" const uintptr_t Kotlin_objectHeaderFlagsMask = 31;
+
 alloc::Allocator::ThreadData::ThreadData(Allocator& allocator) noexcept : impl_(std::make_unique<Impl>(allocator.impl())) {}
 
 alloc::Allocator::ThreadData::~ThreadData() {

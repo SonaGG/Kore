@@ -19,24 +19,30 @@ mm::ExtraObjectData& mm::ExtraObjectData::Install(ObjHeader* object) noexcept {
     // TODO: Consider extracting initialization scheme with speculative load.
     // `object->typeInfoOrMeta_` is assigned at most once. If we read some old value (i.e. not a meta object),
     // we will fail at CAS below. If we read the new value, we will immediately return it.
-    TypeInfo* typeInfo = object->typeInfoOrMetaAcquire();
+    TypeInfo* header = object->typeInfoOrMetaAcquire();
 
-    if (auto* metaObject = ObjHeader::AsMetaObject(typeInfo)) {
+    if (auto* metaObject = ObjHeader::AsMetaObject(header)) {
         return mm::ExtraObjectData::FromMetaObjHeader(metaObject);
     }
 
-    RuntimeCheck(!hasPointerBits(typeInfo, OBJECT_TAG_MASK), "Object must not be tagged");
+    RuntimeCheck(!hasPointerBits(header, OBJECT_TAG_MASK), "Object must not be tagged");
 
     auto& allocator = mm::ThreadRegistry::Instance().CurrentThreadData()->allocator();
-    auto& data = allocator.allocateExtraObjectData(object, typeInfo);
+    auto& data = allocator.allocateExtraObjectData(object, ObjHeader::untagged(header));
+    RuntimeCheck(!hasPointerBits(&data, Kotlin_objectHeaderFlagsMask), "Meta object %p is not aligned", &data);
     std_support::atomic_ref objectAtomicTypeInfo{object->typeInfoOrMeta_};
-    if (!objectAtomicTypeInfo.compare_exchange_strong(typeInfo, reinterpret_cast<TypeInfo*>(&data))) {
-        // Somebody else created `mm::ExtraObjectData` for this object.
-        allocator.destroyUnattachedExtraObjectData(data);
-        return *reinterpret_cast<mm::ExtraObjectData*>(typeInfo);
+    // Kore: the GC may own bits of the header word (see `Kotlin_objectHeaderFlagsMask`), and change them meanwhile: they
+    // are kept, and a change of only them is retried.
+    while (true) {
+        auto flags = reinterpret_cast<uintptr_t>(header) & Kotlin_objectHeaderFlagsMask;
+        auto* desired = reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(&data) | flags);
+        if (objectAtomicTypeInfo.compare_exchange_strong(header, desired)) return data;
+        if (auto* metaObject = ObjHeader::AsMetaObject(header)) {
+            // Somebody else created `mm::ExtraObjectData` for this object.
+            allocator.destroyUnattachedExtraObjectData(data);
+            return mm::ExtraObjectData::FromMetaObjHeader(metaObject);
+        }
     }
-
-    return data;
 }
 
 void mm::ExtraObjectData::UnlinkFromBaseObject() noexcept {
@@ -44,7 +50,14 @@ void mm::ExtraObjectData::UnlinkFromBaseObject() noexcept {
     RuntimeAssert(
             !hasPointerBits(object, WEAK_REF_TAG), "ExtraObjectData %p has uncleared weak reference %p during unlink", this,
             clearPointerBits(object, WEAK_REF_TAG));
-    std_support::atomic_ref{object->typeInfoOrMeta_}.store(const_cast<TypeInfo*>(typeInfo_), std::memory_order_release);
+    // Kore: keeps the GC bits of the header word (see `Install`).
+    std_support::atomic_ref objectAtomicTypeInfo{object->typeInfoOrMeta_};
+    TypeInfo* header = objectAtomicTypeInfo.load(std::memory_order_relaxed);
+    while (true) {
+        auto flags = reinterpret_cast<uintptr_t>(header) & Kotlin_objectHeaderFlagsMask;
+        auto* desired = reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(typeInfo_) | flags);
+        if (objectAtomicTypeInfo.compare_exchange_weak(header, desired, std::memory_order_release, std::memory_order_relaxed)) break;
+    }
     RuntimeAssert(
             !object->has_meta_object(), "Object %p has metaobject %p after removing metaobject %p", object, object->meta_object_or_null(),
             this);

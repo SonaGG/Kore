@@ -271,7 +271,7 @@ void collectYoung() {
 }
 
 bool isOld(ObjHeader* object) {
-    return alloc::objectDataForObject(object).old();
+    return gc::objectBits(object).old();
 }
 
 void collectFull() {
@@ -405,12 +405,12 @@ TEST_F(GenerationalGCTest, HolderAwareBarrierKeepsYoungObjectAlive) {
             global->field3.direct().store(young);
             gc::afterReferenceStoreInObject(global.header(), young);
         }
-        EXPECT_TRUE(alloc::objectDataForObject(global.header()).remembered());
+        EXPECT_TRUE(gc::objectBits(global.header()).remembered());
 
         collectYoung();
 
         EXPECT_THAT(Alive(threadData), testing::UnorderedElementsAre(global.header(), young));
-        EXPECT_FALSE(alloc::objectDataForObject(global.header()).remembered());
+        EXPECT_FALSE(gc::objectBits(global.header()).remembered());
     });
 }
 

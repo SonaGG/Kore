@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import kotlinx.cinterop.*
 import llvm.*
+import org.jetbrains.kotlin.backend.konan.AllocationMode
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
@@ -42,8 +43,12 @@ internal class CodeGenerator(override val generationState: NativeGenerationState
     val intPtrType = LLVMIntPtrTypeInContext(llvm.llvmContext, llvmTargetData)!!
     internal val immOneIntPtrType = LLVMConstInt(intPtrType, 1, 1)!!
     internal val immThreeIntPtrType = LLVMConstInt(intPtrType, 3, 1)!!
-    // Keep in sync with OBJECT_TAG_MASK in C++.
-    internal val immTypeInfoMask = LLVMConstNot(LLVMConstInt(intPtrType, 3, 0)!!)!!
+    // Keep in sync with `Kotlin_objectHeaderFlagsMask` in C++. Kore: with the custom allocator, header bits 2-4 belong to
+    // the GC (type infos and meta objects are 32-byte aligned).
+    internal val immTypeInfoMask by lazy {
+        val flags = if (context.config.allocationMode == AllocationMode.CUSTOM) 31L else 3L
+        LLVMConstNot(LLVMConstInt(intPtrType, flags, 0)!!)!!
+    }
 
     //-------------------------------------------------------------------------//
 

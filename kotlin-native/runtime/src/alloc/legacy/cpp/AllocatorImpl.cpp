@@ -15,6 +15,9 @@
 
 using namespace kotlin;
 
+// Kore: see Memory.h. Meta objects of this allocator are only 8-byte aligned: the header holds the tag bits only.
+extern "C" const uintptr_t Kotlin_objectHeaderFlagsMask = OBJECT_TAG_MASK;
+
 namespace {
 
 // TODO move to common

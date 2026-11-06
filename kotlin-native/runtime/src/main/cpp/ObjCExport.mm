@@ -11,6 +11,7 @@
 #if KONAN_OBJC_INTEROP
 
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #import <mutex>
 #include <string>
@@ -652,7 +653,12 @@ static const TypeInfo* createTypeInfo(
   bool isKotlinObjCClass,
   const TypeInfo* fieldsInfo
 ) {
-  TypeInfo* result = (TypeInfo*)std::calloc(1, sizeof(TypeInfo) + vtable.size() * sizeof(void*));
+  // Kore: type infos are 32-byte aligned (see `Kotlin_objectHeaderFlagsMask`).
+  size_t typeInfoBytes = sizeof(TypeInfo) + vtable.size() * sizeof(void*);
+  void* typeInfoMemory = nullptr;
+  RuntimeCheck(posix_memalign(&typeInfoMemory, kTypeInfoAlignment, typeInfoBytes) == 0, "Out of memory for a type info");
+  std::memset(typeInfoMemory, 0, typeInfoBytes);
+  TypeInfo* result = (TypeInfo*)typeInfoMemory;
   result->typeInfo_ = result;
 
   result->flags_ = TF_OBJC_DYNAMIC | TF_REFLECTION_SHOW_REL_NAME;

@@ -27,6 +27,10 @@ import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.utils.addToStdlib.runUnless
 import kotlin.math.min
 
+// Kore: the alignment of type infos, which keeps bits 2-4 of object headers free for the GC (`Kotlin_objectHeaderFlagsMask`
+// in C++, `kTypeInfoAlignment`).
+internal const val TYPE_INFO_ALIGNMENT = 32
+
 internal fun createLlvmDeclarations(generationState: NativeGenerationState, irModule: IrModuleFragment): LlvmDeclarations {
     val generator = DeclarationsGeneratorVisitor(generationState)
     irModule.acceptChildrenVoid(generator)
@@ -323,6 +327,8 @@ private class DeclarationsGeneratorVisitor(override val generationState: NativeG
 
             typeInfoPtr = typeInfoGlobal.pointer
         }
+        // Kore: object headers keep bits 2-4 free for the GC (`Kotlin_objectHeaderFlagsMask` in C++).
+        typeInfoGlobal.setAlignment(TYPE_INFO_ALIGNMENT)
 
         if (declaration.isUnit() || declaration.isKotlinArray())
             createUniqueDeclarations(declaration, typeInfoPtr, bodyType)

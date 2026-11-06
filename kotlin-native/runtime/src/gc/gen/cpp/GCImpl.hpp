@@ -29,7 +29,7 @@ namespace internal {
 struct RememberedSet {
     // Heap reference slots that received a young object (generic barrier: the owning object is unknown).
     std::vector<ObjHeader**> slots;
-    // Old objects that received a young object (holder-aware barrier). Each is logged once, see `ObjectData::kRemembered`.
+    // Old objects that received a young object (holder-aware barrier). Each is logged once, see `ObjectBits::kRemembered`.
     std::vector<ObjHeader*> objects;
     // Kore: the slots recorded last, by hash: the same slots (atomic fields, globals) receive young objects again and
     // again, and the young collection sorts the slots in its pause.

@@ -65,7 +65,7 @@ NO_INLINE void rememberObject(ObjHeader* holder) noexcept {
 // during a concurrent full mark are marked ("black"), so they don't count as young.
 ALWAYS_INLINE bool isYoungHeapObject(ObjHeader* object) noexcept {
     return object != nullptr && object->heap() && 
-            (!alloc::objectDataForObject(object).oldOrSurviving() ||
+            (!gc::objectBits(object).oldOrSurviving() ||
              // Kore: nursery objects stay young through a full collection (whose mark does not make them old): stores
              // of them into old objects during its concurrent mark must be remembered for the next young collection.
              alloc::nursery::movable(object));
@@ -73,7 +73,7 @@ ALWAYS_INLINE bool isYoungHeapObject(ObjHeader* object) noexcept {
 
 ALWAYS_INLINE void rememberIfOldToYoung(ObjHeader* holder, ObjHeader* value) noexcept {
     if (__builtin_expect(!holder->heap(), false)) return; // Stack objects are roots; permanent objects are immutable.
-    auto& holderData = alloc::objectDataForObject(holder);
+    auto holderData = gc::objectBits(holder);
     if (__builtin_expect(!holderData.oldOrSurviving(), true)) return; // Young holders are traced anyway.
     if (!isYoungHeapObject(value)) return;
     if (holderData.tryRemember()) {
@@ -223,7 +223,7 @@ const std::vector<ObjHeader*>* gRememberedHolders = nullptr;
 constexpr uint32_t kRememberedHoldersPerSlice = 64;
 
 void rescanRememberedHolder(MarkTraits::MarkQueue& markQueue, ObjHeader* holder) noexcept {
-    alloc::objectDataForObject(holder).forget();
+    gc::objectBits(holder).forget();
     MarkTraits::processInMark(markQueue, holder);
     if (auto* extraObjectData = mm::ExtraObjectData::Get(holder)) {
         if (auto* weakReference = extraObjectData->GetRegularWeakReferenceImpl()) {
@@ -281,7 +281,7 @@ void pinIfMovable(ObjHeader* object) noexcept {
     if (object != nullptr && alloc::nursery::movable(object)) alloc::nursery::pin(object);
 }
 
-// The offset of the object header in its heap object (after the GC word).
+// The offset of the object header in its heap object (after the GC word, if there is one).
 ptrdiff_t objectOffset(ObjHeader* object) noexcept {
     return reinterpret_cast<uint8_t*>(object) - reinterpret_cast<uint8_t*>(&alloc::objectDataForObject(object));
 }
@@ -319,7 +319,7 @@ void verifyAfterEvacuation() noexcept {
             }
         }
         if (alloc::nursery::inFreeBlock(object)) {
-            uintptr_t word = holder != nullptr && holder->heap() ? alloc::objectDataForObject(holder).word() : 0;
+            uintptr_t word = holder != nullptr && holder->heap() ? gc::objectBits(holder).load() : 0;
             uint32_t count = holder != nullptr && holder->type_info()->IsArray() ? holder->array()->count_ : 0;
             konan::consoleErrorf(
                     "kore-gc-verify: reference to a released nursery block %p from %s %p (type %p, word %p, array count %u, "
@@ -331,7 +331,7 @@ void verifyAfterEvacuation() noexcept {
         {
             // A referred object must have a valid header (its type info points to itself).
             auto header = reinterpret_cast<uintptr_t>(object->typeInfoOrMetaRelaxed());
-            auto* typeInfo = reinterpret_cast<const TypeInfo*>(header & ~uintptr_t(OBJECT_TAG_MASK));
+            auto* typeInfo = ObjHeader::untagged(reinterpret_cast<TypeInfo*>(header));
             bool valid = typeInfo != nullptr && (header & OBJECT_TAG_MASK) != 2 && reinterpret_cast<uintptr_t>(typeInfo) > 4096 &&
                     reinterpret_cast<uintptr_t>(typeInfo) < (uintptr_t(1) << 47) && (reinterpret_cast<uintptr_t>(typeInfo) & 7) == 0 &&
                     typeInfo->typeInfo_ != nullptr && typeInfo->typeInfo_->typeInfo_ == typeInfo->typeInfo_;
@@ -420,7 +420,7 @@ namespace {
 void verifyRememberedBeforeYoung(alloc::Allocator& allocator, uint64_t epoch) noexcept {
     size_t checked = 0;
     allocator.TraverseAllocatedObjects([&](ObjHeader* holder) {
-        auto& data = alloc::objectDataForObject(holder);
+        auto data = gc::objectBits(holder);
         if (!data.old()) return;
         ++checked;
         traverseObjectFields(holder, [&](auto accessor) {
@@ -428,9 +428,9 @@ void verifyRememberedBeforeYoung(alloc::Allocator& allocator, uint64_t epoch) no
             if (value != nullptr && alloc::nursery::movable(value) && !data.remembered()) {
                 konan::consoleErrorf(
                         "kore-gc-verify: epoch %llu: old %p (type %p, word %p, count %u) refers to nursery %p (word %p) unremembered\n",
-                        static_cast<unsigned long long>(epoch), holder, holder->type_info(), reinterpret_cast<void*>(data.word()),
+                        static_cast<unsigned long long>(epoch), holder, holder->type_info(), reinterpret_cast<void*>(data.load()),
                         holder->type_info()->IsArray() ? holder->array()->count_ : 0u, value,
-                        reinterpret_cast<void*>(alloc::objectDataForObject(value).word()));
+                        reinterpret_cast<void*>(gc::objectBits(value).load()));
                 std::abort();
             }
         });
@@ -445,18 +445,18 @@ void verifyOldToYoungRemembered(alloc::Allocator& allocator, const gc::internal:
     std::unordered_set<ObjHeader**> slots(set.slots.begin(), set.slots.end());
     size_t checked = 0;
     allocator.TraverseAllocatedObjects([&](ObjHeader* holder) {
-        auto& data = alloc::objectDataForObject(holder);
+        auto data = gc::objectBits(holder);
         if (!data.old()) return;
         ++checked;
         if (objects.count(holder) != 0) return;
         traverseObjectFields(holder, [&](auto accessor) {
             ObjHeader** slot = accessor.direct().location();
             ObjHeader* value = *slot;
-            if (value == nullptr || !value->heap() || alloc::objectDataForObject(value).oldOrSurviving()) return;
+            if (value == nullptr || !value->heap() || gc::objectBits(value).oldOrSurviving()) return;
             if (slots.count(slot) != 0) return;
             konan::consoleErrorf(
                     "kore-gc-verify: epoch %llu: old %p (type %p, word %p) slot %p refers to young %p (type %p) unremembered\n",
-                    static_cast<unsigned long long>(epoch), holder, holder->type_info(), reinterpret_cast<void*>(data.word()),
+                    static_cast<unsigned long long>(epoch), holder, holder->type_info(), reinterpret_cast<void*>(data.load()),
                     slot, value, value->type_info());
             std::abort();
         });
@@ -474,12 +474,12 @@ void verifyBeforeYoungMark(alloc::Allocator& allocator, const gc::internal::Reme
         konan::consoleErrorf(
                 "kore-gc-verify: epoch %llu: %s: holder %p (type %p, word %p, retained %d) slot %p -> %p (released by %d)\n",
                 static_cast<unsigned long long>(epoch), what, holder, holder != nullptr ? holder->type_info() : nullptr,
-                holder != nullptr ? reinterpret_cast<void*>(alloc::objectDataForObject(holder).word()) : nullptr,
+                holder != nullptr ? reinterpret_cast<void*>(gc::objectBits(holder).load()) : nullptr,
                 holder != nullptr && alloc::nursery::inRetainedBlock(holder), slot, value, alloc::nursery::releaseKind(value));
         std::abort();
     };
     auto checkHolder = [&](ObjHeader* holder) {
-        auto& data = alloc::objectDataForObject(holder);
+        auto data = gc::objectBits(holder);
         traverseObjectFields(holder, [&](auto accessor) {
             ObjHeader** slot = accessor.direct().location();
             ObjHeader* value = *slot;
@@ -492,7 +492,7 @@ void verifyBeforeYoungMark(alloc::Allocator& allocator, const gc::internal::Reme
     };
     allocator.TraverseAllocatedObjects(checkHolder);
     alloc::nursery::forEachRetainedObject([&](ObjHeader* holder) {
-        if (alloc::objectDataForObject(holder).old()) checkHolder(holder);
+        if (gc::objectBits(holder).old()) checkHolder(holder);
     });
     for (auto& thread : mm::ThreadRegistry::Instance().LockForIter()) {
         for (auto value : mm::ThreadRootSet(thread)) {
@@ -550,7 +550,7 @@ void gc::internal::GenerationalGC::evacuateNursery() noexcept {
     auto evacuate = [&](ObjHeader* object) noexcept {
         auto& data = alloc::objectDataForObject(object);
         if (data.forwarded()) return; // Already done (in mark order).
-        if (!data.marked()) return; // Dead.
+        if (!gc::objectBits(object).marked()) return; // Dead.
         // Objects with extra object data (weak references, associated objects) are referred to from it: they stay.
         if (alloc::nursery::pinned(object) || object->has_meta_object()) {
             alloc::nursery::retain(object);
@@ -603,15 +603,17 @@ void gc::internal::GenerationalGC::evacuateNursery() noexcept {
     }
     for (const auto& move : moves) {
         std::memcpy(reinterpret_cast<uint8_t*>(move.to) - move.offset, reinterpret_cast<uint8_t*>(move.from) - move.offset, move.bytes);
-        alloc::objectDataForObject(move.to).reset(GC::ObjectData::kOld);
+        alloc::objectDataForObject(move.to).clearForwarding();
+        gc::objectBits(move.to).reset(gc::ObjectBits::kOld);
     }
     // What stays in the nursery: survivors are promoted in place, the rest is dead.
     alloc::nursery::forEachMovableObject([](ObjHeader* object) noexcept {
         auto& data = alloc::objectDataForObject(object);
-        bool stays = !data.forwarded() && data.marked();
+        bool stays = !data.forwarded() && gc::objectBits(object).marked();
         // Blocks that are not retained are cleared when released.
         if (!stays && alloc::nursery::retaining(object)) neutralize(object);
-        data.reset(stays ? GC::ObjectData::kOld : 0);
+        gc::objectBits(object).reset(stays ? gc::ObjectBits::kOld : 0);
+        data.clearForwarding();
     });
     allocator_.finishEvacuation();
     alloc::nursery::finishYoungCollection();
@@ -628,20 +630,20 @@ void gc::internal::GenerationalGC::finishNurseryAfterFullMark() noexcept {
         std::unique_lock orphanedGuard(orphanedMutex_);
         for (auto* holders : gNurseryHolderLists) {
             for (ObjHeader* holder : *holders) {
-                if (alloc::objectDataForObject(holder).tryRemember()) orphaned_.objects.push_back(holder);
+                if (gc::objectBits(holder).tryRemember()) orphaned_.objects.push_back(holder);
             }
             holders->clear();
         }
     }
     // Nursery objects are swept by young collections, not by the allocator: reset their mark state. Retained blocks hold
     // old objects: the marked ones stay old, the others are dead.
-    alloc::nursery::forEachMovableObject([](ObjHeader* object) noexcept { alloc::objectDataForObject(object).reset(0); });
+    alloc::nursery::forEachMovableObject([](ObjHeader* object) noexcept { gc::objectBits(object).reset(0); });
     alloc::nursery::releaseEmptyRetainedBlocks([](ObjHeader* object) noexcept {
-        auto& data = alloc::objectDataForObject(object);
-        bool alive = (data.word() & GC::ObjectData::kMarked) != 0;
+        auto data = gc::objectBits(object);
+        bool alive = data.marked();
         // The objects this collection found dead may refer to objects that its sweep frees.
         if (!alive) neutralize(object);
-        data.reset(alive ? (data.word() & GC::ObjectData::kRemembered) | GC::ObjectData::kOld : 0);
+        data.reset(alive ? (data.bits() & gc::ObjectBits::kRemembered) | gc::ObjectBits::kOld : 0);
         return alive;
     });
 }
@@ -667,7 +669,7 @@ void gc::internal::GenerationalGC::keepLiveRememberedSetEntries() noexcept {
     collectRememberedSets(all);
     all.objects.erase(
             std::remove_if(all.objects.begin(), all.objects.end(), [](ObjHeader* holder) {
-                return !alloc::objectDataForObject(holder).marked();
+                return !gc::objectBits(holder).marked();
             }),
             all.objects.end());
     std::unique_lock guard(orphanedMutex_);
@@ -734,7 +736,7 @@ void gc::internal::GenerationalGC::markRememberedSet(
             ++heapSlots;
             ++slotOwnerTypes[owner->type_info()];
         }
-        if (!alloc::objectDataForObject(owner).old()) return;
+        if (!gc::objectBits(owner).old()) return;
         ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
         if (value != nullptr && value->heap()) {
             MarkTraits::tryEnqueue(markQueue, value);
@@ -757,7 +759,7 @@ void gc::internal::GenerationalGC::markRememberedSet(
         for (ObjHeader** slot : rememberedSet.slots) {
             if (!alloc::nursery::inRetainedBlock(slot)) continue;
             ObjHeader* owner = alloc::nursery::retainedObjectContaining(reinterpret_cast<uintptr_t>(slot));
-            if (owner == nullptr || !alloc::objectDataForObject(owner).old()) continue;
+            if (owner == nullptr || !gc::objectBits(owner).old()) continue;
             ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
             if (value != nullptr && value->heap()) MarkTraits::tryEnqueue(markQueue, value);
             if (recordingNurserySlots()) recordIfMovable(slot);
@@ -935,9 +937,9 @@ NO_INLINE void checkFieldsInMark(ObjHeader* holder) noexcept {
     size_t index = 0;
     traverseObjectFields(holder, [&](auto accessor) noexcept {
         ObjHeader* value = accessor.direct();
-        bool deadRetained = value != nullptr && alloc::nursery::inRetainedBlock(value) && alloc::objectDataForObject(value).word() == 0;
-        if (value != nullptr && value->heap() && (reinterpret_cast<uintptr_t>(value->typeInfoOrMeta_) == 0 || deadRetained)) {
-            uintptr_t word = holder->heap() ? alloc::objectDataForObject(holder).word() : 0;
+        bool deadRetained = value != nullptr && alloc::nursery::inRetainedBlock(value) && gc::objectBits(value).bits() == 0;
+        if (value != nullptr && value->heap() && (value->typeInfoOrMetaUntagged() == nullptr || deadRetained)) {
+            uintptr_t word = holder->heap() ? gc::objectBits(holder).load() : 0;
             konan::consoleErrorf(
                     "kore-gc-check: %p (type %p size %d refs %d meta %d, word %p, nursery %d, retained %d) field #%zu -> %p "
                     "without type info or dead (dead retained %d, young %d, nursery %d, retained %d, free %d)\n",
@@ -1066,9 +1068,10 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::D
     // Kore: only the common case (a young heap holder) is inlined into compiled code; old holders go out of line, which
     // keeps the code of every reference store small (and the functions doing them inlinable).
     if (__builtin_expect(tag != OBJECT_TAG_HEAP, false)) return; // Stack objects are roots; permanent objects are immutable.
-    auto& holderData = alloc::objectDataForObject(holder);
-    if (__builtin_expect(!holderData.oldOrSurviving(), true)) return;
-    if (holderData.remembered()) return; // Already logged until the next young collection.
+    // Kore: one load of the GC bits for both checks.
+    auto holderBits = gc::objectBits(holder).load();
+    if (__builtin_expect((holderBits & (gc::ObjectBits::kOld | gc::ObjectBits::kMarked)) == 0, true)) return;
+    if ((holderBits & gc::ObjectBits::kRemembered) != 0) return; // Already logged until the next young collection.
     rememberOldHolderIfYoungValue(holder, value);
 }
 
@@ -1096,7 +1099,7 @@ void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHea
         return;
     }
     std::memmove(destination, source, count * sizeof(ObjHeader*));
-    if (!holder->heap() || !alloc::objectDataForObject(holder).oldOrSurviving()) return;
+    if (!holder->heap() || !gc::objectBits(holder).oldOrSurviving()) return;
     for (size_t i = 0; i < count; ++i) {
         if (isYoungHeapObject(destination[i])) {
             rememberIfOldToYoung(holder, destination[i]);
@@ -1117,13 +1120,13 @@ PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<Ob
 
 // Alive in the collection in progress: marked, or old during a young collection (which does not mark old objects).
 PERFORMANCE_INLINE bool gc::isMarked(ObjHeader* object) noexcept {
-    auto& objectData = alloc::objectDataForObject(object);
+    auto objectData = objectBits(object);
     return objectData.marked() || (internal::isYoungCollection() && objectData.old());
 }
 
 // Sweep: survivors become old and their marks are reset. A young collection keeps unmarked old objects.
 PERFORMANCE_INLINE bool gc::tryResetMark(GC::ObjectData& objectData) noexcept {
-    return objectData.sweep(/* fullCollection = */ !internal::isYoungCollection());
+    return objectBits(alloc::objectForObjectData(objectData)).sweep(/* fullCollection = */ !internal::isYoungCollection());
 }
 
 ALWAYS_INLINE bool gc::barriers::ExternalRCRefReleaseGuard::isNoop() {
@@ -1165,7 +1168,7 @@ bool gc::mark::ConcurrentMark::MarkTraits::checking() noexcept {
 }
 
 void gc::mark::ConcurrentMark::MarkTraits::checkEnqueue(ObjHeader* object) noexcept {
-    if (alloc::nursery::inRetainedBlock(object) && alloc::objectDataForObject(object).word() == 0) {
+    if (alloc::nursery::inRetainedBlock(object) && gc::objectBits(object).bits() == 0) {
         konan::consoleErrorf("kore-gc-check: enqueueing dead object %p of a retained block (young %d)\n", object,
                              internal::isYoungCollection());
         std::abort();

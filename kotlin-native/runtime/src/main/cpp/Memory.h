@@ -35,6 +35,14 @@ typedef enum {
     OBJECT_TAG_MASK = (1 << 2) - 1
 } ObjectTag;
 
+// Kore: the low bits of an object header word that are not part of its type info or meta object pointer: the tag
+// (`OBJECT_TAG_MASK`) and, with the custom allocator, bits 2-4, which the generational GC uses for its mark, old and
+// remembered bits (gc/gen ObjectData.hpp). That allocator keeps meta objects 32-byte aligned, like the compiler does for
+// type infos. Defined by the allocator: 31 or `OBJECT_TAG_MASK`. Keep in sync with `immTypeInfoMask` in Kotlin.
+extern "C" const uintptr_t Kotlin_objectHeaderFlagsMask;
+// Kore: type infos are 32-byte aligned (see `Kotlin_objectHeaderFlagsMask`).
+inline constexpr size_t kTypeInfoAlignment = 32;
+
 struct ArrayHeader;
 struct MetaObjHeader;
 
@@ -47,7 +55,7 @@ struct ObjHeader {
 
   // Returns `nullptr` if it's not a meta object.
   static MetaObjHeader* AsMetaObject(TypeInfo* typeInfo) noexcept {
-      auto* typeInfoOrMeta = clearPointerBits(typeInfo, OBJECT_TAG_MASK);
+      auto* typeInfoOrMeta = untagged(typeInfo);
       if (typeInfoOrMeta != typeInfoOrMeta->typeInfo_) {
           return reinterpret_cast<MetaObjHeader*>(typeInfoOrMeta);
       } else {
@@ -55,7 +63,14 @@ struct ObjHeader {
       }
   }
 
+  // Kore: the type info or meta object pointer of a header word, without the tag and GC bits.
+  static TypeInfo* untagged(TypeInfo* typeInfoOrMeta) noexcept {
+      return reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(typeInfoOrMeta) & ~Kotlin_objectHeaderFlagsMask);
+  }
+
   TypeInfo* typeInfoOrMetaRelaxed() const { return kotlin::std_support::atomic_ref{typeInfoOrMeta_}.load(std::memory_order_relaxed);}
+  // Kore: null for an object that is not constructed yet.
+  TypeInfo* typeInfoOrMetaUntagged() const { return untagged(typeInfoOrMetaRelaxed()); }
   TypeInfo* typeInfoOrMetaAcquire() const { return kotlin::std_support::atomic_ref{typeInfoOrMeta_}.load(std::memory_order_acquire);}
 
   /**
@@ -71,7 +86,7 @@ struct ObjHeader {
    * Hardware guaranties on many supported platforms doesn't allow this to happen.
    */
   const TypeInfo* type_info() const {
-      auto atomicTypeInfoPtr = kotlin::std_support::atomic_ref{clearPointerBits(typeInfoOrMetaRelaxed(), OBJECT_TAG_MASK)->typeInfo_};
+      auto atomicTypeInfoPtr = kotlin::std_support::atomic_ref{untagged(typeInfoOrMetaRelaxed())->typeInfo_};
       const TypeInfo* typeInfo = atomicTypeInfoPtr.load(std::memory_order_relaxed);
       RuntimeAssert(typeInfo != nullptr, "TypeInfo ptr in object %p in null", this);
       return typeInfo;

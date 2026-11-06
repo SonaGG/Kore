@@ -97,8 +97,7 @@ bool gc::barriers::BarriersThreadData::shouldMarkNewObjects() const noexcept {
 PERFORMANCE_INLINE void gc::barriers::BarriersThreadData::onAllocation(ObjHeader* allocated) {
     BarriersLogDebug(currentPhaseRelaxed(), "Allocation %p", allocated);
     if (shouldMarkNewObjects()) {
-        auto& objectData = alloc::objectDataForObject(allocated);
-        objectData.markUncontended();
+        gc::objectBits(allocated).markUncontended();
         markHandle_->addObject();
     }
 }

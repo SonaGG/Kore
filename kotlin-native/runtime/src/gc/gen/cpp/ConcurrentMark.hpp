@@ -97,7 +97,7 @@ public:
         }
 
         static PERFORMANCE_INLINE bool tryEnqueue(AnyQueue& queue, ObjHeader* object) noexcept {
-            auto& objectData = alloc::objectDataForObject(object);
+            auto objectData = objectBits(object);
             // Kore: a young collection stops at the old generation.
             if (internal::isYoungCollection()) {
                 if (objectData.old()) return false;
@@ -105,7 +105,7 @@ public:
                 // need no tracing: mark them without a trip through the queue, which halves the work of marking many
                 // small objects. Only in young collections, where the world is stopped (no extra object data appears
                 // concurrently).
-                auto* typeInfo = clearPointerBits(object->typeInfoOrMetaRelaxed(), OBJECT_TAG_MASK);
+                auto* typeInfo = object->typeInfoOrMetaUntagged();
                 if (typeInfo->typeInfo_ == typeInfo && typeInfo->processObjectInMark == Kotlin_processEmptyObjectInMark) {
                     bool marked = objectData.tryMark();
                     if (marked && __builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
@@ -125,7 +125,7 @@ public:
         }
 
         static PERFORMANCE_INLINE bool tryMark(ObjHeader* object) noexcept {
-            auto& objectData = alloc::objectDataForObject(object);
+            auto objectData = objectBits(object);
             if (internal::isYoungCollection() && objectData.old()) return false; // Kore
             bool pushed = objectData.tryMark();
             if (pushed) {
@@ -135,7 +135,7 @@ public:
         }
 
         static PERFORMANCE_INLINE void processInMark(MarkQueue& markQueue, ObjHeader* object) noexcept {
-            if (__builtin_expect(reinterpret_cast<uintptr_t>(object->typeInfoOrMeta_) == 0, false)) reportUnconstructed(object);
+            if (__builtin_expect(object->typeInfoOrMetaUntagged() == nullptr, false)) reportUnconstructed(object);
             auto process = object->type_info()->processObjectInMark;
             RuntimeAssert(process != nullptr, "Got null processObjectInMark for object %p", object);
             process(static_cast<void*>(&markQueue), object);

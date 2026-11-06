@@ -269,7 +269,7 @@ using RegularRef = kotlin::mm::ObjCBackRef;
             if (boundClass != nil && [self class] != boundClass && [[self class] isSubclassOfClass:boundClass]) {
                 const TypeInfo* patchedTypeInfo = Kotlin_SwiftExport_getOrCreateTypeInfoForSwiftSubclass([self class], currentTypeInfo);
                 if (patchedTypeInfo != nullptr && patchedTypeInfo != currentTypeInfo) {
-                    auto* typeInfoSlot = clearPointerBits(obj->typeInfoOrMeta_, OBJECT_TAG_MASK);
+                    auto* typeInfoSlot = ObjHeader::untagged(obj->typeInfoOrMeta_); // Kore: without the GC bits too.
                     kotlin::std_support::atomic_ref{typeInfoSlot->typeInfo_}.store(
                         const_cast<TypeInfo*>(patchedTypeInfo), std::memory_order_release);
                 }

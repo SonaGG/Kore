@@ -109,6 +109,26 @@ kotlin::alloc::AllocationSize kotlin::alloc::ExtraDataSweepTraits::elementSize(u
     return ExtraObjectCell::size();
 }
 
+namespace {
+
+// Kore: pages are at least 32-byte aligned (for `ExtraObjectCell`s, see `Kotlin_objectHeaderFlagsMask`). `calloc`
+// guarantees less: it gets 40 bytes more, and the word before the aligned memory keeps what `free` needs.
+constexpr size_t kSystemAllocAlignment = 32;
+
+void* callocAligned(size_t size) noexcept {
+    auto* raw = static_cast<uint8_t*>(calloc(size + kSystemAllocAlignment + sizeof(void*), 1));
+    if (raw == nullptr) return nullptr;
+    auto aligned = (reinterpret_cast<uintptr_t>(raw) + sizeof(void*) + kSystemAllocAlignment - 1) & ~(kSystemAllocAlignment - 1);
+    reinterpret_cast<void**>(aligned)[-1] = raw;
+    return reinterpret_cast<void*>(aligned);
+}
+
+void freeAligned(void* memory) noexcept {
+    free(static_cast<void**>(memory)[-1]);
+}
+
+} // namespace
+
 static void* systemAlloc(uint64_t size) noexcept {
     if (size > std::numeric_limits<size_t>::max()) {
         konan::consoleErrorf("Out of memory trying to allocate %" PRIu64 " bytes. Aborting.\n", size);
@@ -117,7 +137,7 @@ static void* systemAlloc(uint64_t size) noexcept {
     void* memory;
     bool error;
     if (kotlin::compiler::disableMmap()) {
-        memory = calloc(size, 1);
+        memory = callocAligned(size);
         error = memory == nullptr;
     } else {
 #if KONAN_WINDOWS
@@ -143,7 +163,7 @@ static void* systemAlloc(uint64_t size) noexcept {
 
 static void systemFree(void* ptr, size_t size) noexcept {
     if (kotlin::compiler::disableMmap()) {
-        free(ptr);
+        freeAligned(ptr);
     } else {
 #if KONAN_WINDOWS
         RuntimeFail("mmap is not available on mingw");

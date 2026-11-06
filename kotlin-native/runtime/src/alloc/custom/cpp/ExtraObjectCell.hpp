@@ -10,7 +10,7 @@
 
 namespace kotlin::alloc {
 
-struct ExtraObjectCell {
+struct alignas(32) ExtraObjectCell { // Kore: aligned, see `data_`.
     static constexpr AllocationSize size() {
         return AllocationSize::bytesAtLeast(sizeof(ExtraObjectCell));
     }
@@ -21,17 +21,21 @@ struct ExtraObjectCell {
 
     mm::ExtraObjectData* Data() { return reinterpret_cast<mm::ExtraObjectData*>(data_); }
 
+    // Kore: the data first, so that it is as aligned as the cell: object headers that point to it keep bits 2-4 free
+    // (see `Kotlin_objectHeaderFlagsMask`). Cells are 32-byte aligned.
+    struct alignas(mm::ExtraObjectData) {
+        uint8_t data_[sizeof(mm::ExtraObjectData)];
+    };
+
     // This is used to build a finalizers queue.
     ExtraObjectCell* next_ = nullptr;
     auto atomicNext() noexcept {
         return std_support::atomic_ref{next_};
     }
-    struct alignas(mm::ExtraObjectData) {
-        uint8_t data_[sizeof(mm::ExtraObjectData)];
-    };
 };
 
 // ensure const-evaluatable
 static_assert(ExtraObjectCell::size().inCells() > 0);
+static_assert(offsetof(ExtraObjectCell, data_) == 0 && sizeof(ExtraObjectCell) % 32 == 0); // Kore
 
 } // namespace kotlin::alloc

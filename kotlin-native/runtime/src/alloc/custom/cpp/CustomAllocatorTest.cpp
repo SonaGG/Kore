@@ -28,7 +28,7 @@ inline constexpr int MIN_BLOCK_SIZE = 2;
 
 TEST_F(CustomAllocatorTest, SmallAllocNonNull) {
     const int N = 200;
-    TypeInfo fakeTypes[N];
+    FakeTypeInfo fakeTypes[N];
     for (int i = 1; i < N; ++i) {
         fakeTypes[i].typeInfo_ = &fakeTypes[i];
         fakeTypes[i].instanceSize_ = 8 * i;
@@ -51,7 +51,7 @@ TEST_F(CustomAllocatorTest, SmallAllocSameFixedBlockPage) {
     for (int blocks = MIN_BLOCK_SIZE; blocks < FixedBlockPage::MAX_BLOCK_SIZE; ++blocks) {
         Heap heap;
         CustomAllocator ca(heap);
-        TypeInfo fakeType{};
+        FakeTypeInfo fakeType{};
         fakeType.typeInfo_ = &fakeType,
         fakeType.instanceSize_ = 8 * blocks,
         fakeType.flags_ = 0;
@@ -102,7 +102,7 @@ TEST_F(CustomAllocatorTest, TwoAllocatorsDifferentPages) {
         Heap heap;
         CustomAllocator ca1(heap);
         CustomAllocator ca2(heap);
-        TypeInfo fakeType{};
+        FakeTypeInfo fakeType{};
         fakeType.typeInfo_ = &fakeType;
         fakeType.instanceSize_ = 8 * blocks;
         fakeType.flags_ = 0;

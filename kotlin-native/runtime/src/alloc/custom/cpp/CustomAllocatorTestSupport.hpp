@@ -16,8 +16,12 @@
 #include "FixedBlockPage.hpp"
 #include "SingleObjectPage.hpp"
 #include "GCStatistics.hpp"
+#include "Memory.h"
 
 namespace kotlin::alloc::test_support {
+
+// Kore: type infos must be 32-byte aligned (see `Kotlin_objectHeaderFlagsMask`).
+struct alignas(kTypeInfoAlignment) FakeTypeInfo : TypeInfo {};
 
 class FakeObjectHeader {
 public:

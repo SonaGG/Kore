@@ -32,7 +32,7 @@ struct alignas(8) FixedBlockCell {
     };
 };
 
-class alignas(kPageAlignment) FixedBlockPage : public MultiObjectPage<FixedBlockPage> {
+class alignas(32) FixedBlockPage : public MultiObjectPage<FixedBlockPage> { // Kore: 32, see `cells_`.
 public:
     static inline constexpr size_t SIZE() {
         return kotlin::compiler::fixedBlockPageSize() * KiB;
@@ -139,7 +139,8 @@ private:
     uint32_t blockSize_;
     uint32_t end_;
     float liveFraction_ = 0; // Kore
-    FixedBlockCell cells_[];
+    // Kore: aligned for `ExtraObjectCell`s.
+    alignas(32) FixedBlockCell cells_[];
 };
 
 } // namespace kotlin::alloc

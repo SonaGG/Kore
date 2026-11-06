@@ -21,7 +21,7 @@ namespace kotlin::alloc {
 
 class SingleObjectPage;
 
-class alignas(kPageAlignment) SingleObjectPage : public AnyPage<SingleObjectPage> {
+class alignas(32) SingleObjectPage : public AnyPage<SingleObjectPage> { // Kore: 32, see `data_`.
 public:
 
     static SingleObjectPage* Create(uint64_t cellCount) noexcept;
@@ -65,7 +65,8 @@ private:
     // Testing method
     std::vector<uint8_t*> GetAllocatedBlocks() noexcept;
 
-    struct alignas(8) {
+    // Kore: 32 for `ExtraObjectCell`s.
+    struct alignas(32) {
         uint8_t data_[];
     };
 };
