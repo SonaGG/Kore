@@ -638,7 +638,7 @@ void gc::internal::GenerationalGC::finishNurseryAfterFullMark() noexcept {
     alloc::nursery::forEachMovableObject([](ObjHeader* object) noexcept { alloc::objectDataForObject(object).reset(0); });
     alloc::nursery::releaseEmptyRetainedBlocks([](ObjHeader* object) noexcept {
         auto& data = alloc::objectDataForObject(object);
-        bool alive = (data.word() & ~GC::ObjectData::kFlags) != 0;
+        bool alive = (data.word() & GC::ObjectData::kMarked) != 0;
         // The objects this collection found dead may refer to objects that its sweep frees.
         if (!alive) neutralize(object);
         data.reset(alive ? (data.word() & GC::ObjectData::kRemembered) | GC::ObjectData::kOld : 0);

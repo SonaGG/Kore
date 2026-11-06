@@ -13,6 +13,7 @@
 
 #include "GCStatistics.hpp"
 #include "ManuallyScoped.hpp"
+#include "MarkStack.hpp"
 #include "ObjectData.hpp"
 #include "concurrent/ParallelProcessor.hpp"
 #include "SafePoint.hpp"
@@ -54,7 +55,8 @@ namespace kotlin::gc::mark {
  * 7. Prepare marked heap for sweeping and resume mutation. // TODO prepare heap without a pause
  */
 class ConcurrentMark : private Pinned {
-    using MarkStackImpl = intrusive_forward_list<GC::ObjectData>;
+    // Kore: arrays of object pointers instead of a list linked through the objects' GC words.
+    using MarkStackImpl = ChunkedStack<ObjHeader, 512>;
 
 public:
     // work balancing parameters were chosen pretty arbitrary
@@ -83,9 +85,8 @@ public:
         static PERFORMANCE_INLINE ObjHeader* tryDequeue(MarkQueue& queue) noexcept {
             while (true) {
                 if (__builtin_expect(arraySlicesPending(), false)) markArraySlices(queue);
-                auto* obj = queue.tryPop();
-                if (obj) {
-                    auto object = alloc::objectForObjectData(*obj);
+                auto* object = queue.tryPop();
+                if (object) {
                     RuntimeLogDebug({logging::Tag::kGCMark}, "Dequeued %p", object);
                     return object;
                 }
@@ -113,14 +114,14 @@ public:
                     return marked;
                 }
             }
-            bool pushed = queue.tryPush(objectData);
-            if (pushed && __builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
+            // Kore: whoever sets the mark bit pushes the object.
+            if (!objectData.tryMark()) return false;
+            queue.tryPush(*object);
+            if (__builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
                 internal::recordNurseryOrder(object);
             }
-            if (pushed) {
-                RuntimeLogDebug({logging::Tag::kGCMark}, "Enqueued %p", object);
-            }
-            return pushed;
+            RuntimeLogDebug({logging::Tag::kGCMark}, "Enqueued %p", object);
+            return true;
         }
 
         static PERFORMANCE_INLINE bool tryMark(ObjHeader* object) noexcept {
