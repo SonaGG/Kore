@@ -84,6 +84,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: back local lists of boxed primitives that are only filled and iterated by primitive arrays (default: true).
     val primitiveLists by booleanOption()
 
+    // Kore: call suspend functions that can never suspend as plain functions, without a continuation (default: true).
+    val suspendFastPath by booleanOption()
+
     // Kore: load type infos and their virtual and interface tables as invariant, so lookups are hoisted and shared.
     val invariantTypeInfo by booleanOption()
 

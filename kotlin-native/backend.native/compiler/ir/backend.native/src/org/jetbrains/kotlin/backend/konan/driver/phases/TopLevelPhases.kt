@@ -139,6 +139,14 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
             }
         }
 
+        // Kore: see [org.jetbrains.kotlin.backend.konan.lower.SuspendFastPath]. Over the module and its dependencies at once.
+        fun NativeGenerationState.runSuspendFastPath(fragment: BackendJobFragment) {
+            runEngineForLowerings {
+                val modules = listOf(fragment.irModule) + findDependenciesToCompile().reversed()
+                org.jetbrains.kotlin.backend.konan.lower.SuspendFastPath(context.context, modules).run()
+            }
+        }
+
         fun List<BackendJobFragment>.runAllLowerings(): List<NativeGenerationState> {
             val generationStates = this.map { fragment -> createGenerationState(fragment) }
             val fragmentWithState = this.zip(generationStates)
@@ -171,6 +179,7 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
 
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, validateIrAfterInliningAllFunctions) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, listOf(constEvaluationPhase)) }
+            if (context.config.suspendFastPath) fragmentWithState.forEach { [fragment, state] -> state.runSuspendFastPath(fragment) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, state.context.config.getLoweringsAfterInlining()) }
             fragmentWithState.forEach { [fragment, state] -> state.runSpecifiedLowerings(fragment, validateIrAfterLowering) }
 
