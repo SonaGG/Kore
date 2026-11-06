@@ -82,6 +82,7 @@ extern const int32_t Kotlin_conservativeStacks = 0; // Kore
 extern const int32_t Kotlin_immix = 0; // Kore
 extern const int32_t Kotlin_compressedRefs = 0; // Kore
 extern const int32_t Kotlin_compressedRefsZeroBased = 0; // Kore
+extern const int32_t Kotlin_compactHeaders = 0; // Kore
 extern const int32_t Kotlin_gcWord = 1; // Kore
 extern const int32_t Kotlin_pagedAllocator = 1;
 extern const int32_t Kotlin_latin1Strings = 1;

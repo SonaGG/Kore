@@ -112,7 +112,8 @@ private fun ContextUtils.createClassBody(name: String, fields: List<ClassLayoutB
             add(type)
             currentOffset += LLVMStoreSizeOfType(runtime.targetData, type)
         }
-        addAndCount(runtime.objHeaderType)
+        // Kore: compact headers: 4 bytes, the first 4-byte field following in the header word.
+        addAndCount(if (llvm.compactHeaders) llvm.int32Type else runtime.objHeaderType)
         for (field in fields) {
             if (packed) {
                 val offset = (currentOffset % field.alignment).toInt()
@@ -125,6 +126,8 @@ private fun ContextUtils.createClassBody(name: String, fields: List<ClassLayoutB
             indices[field.irFieldSymbol] = this.size
             addAndCount(fieldType(field))
         }
+        // Kore: objects take 8 bytes at least (the runtime reads the header word).
+        if (llvm.compactHeaders && currentOffset < 8) addAndCount(LLVMArrayType(llvm.int8Type, (8 - currentOffset).toInt())!!)
     }
     LLVMStructSetBody(classType, fieldTypes.toCValues(), fieldTypes.size, if (packed) 1 else 0)
 

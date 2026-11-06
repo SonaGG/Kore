@@ -124,7 +124,7 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
                 val fixups = fields.indices.mapNotNull { index ->
                     (listOf(index + 1) to fields[index]).takeIf { layout[index].type.binaryTypeIsReference() && !isNullConstant(fields[index]) }
                 }
-                return createFixedUpConstant(llvm.struct(objHeader(type.typeInfoPtr), *values.toTypedArray()), fixups)
+                return createFixedUpConstant(objectBody(type, values), fixups)
             }
         }
         return createConstant(createConstKotlinObjectBody(type, *fields))
@@ -132,12 +132,24 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
 
     fun createConstKotlinObjectBody(type: IrClass, vararg fields: ConstValue): ConstValue {
         // TODO: handle padding here
-        return llvm.struct(objHeader(type.typeInfoPtr), *fields)
+        return objectBody(type, fields.toList())
+    }
+
+    // Kore: header and fields, laid out as the class body: with compact headers, a 4-byte header (the type info address,
+    // below 4 GiB), and 8 bytes at least.
+    private fun objectBody(type: IrClass, fields: List<ConstValue>): ConstValue {
+        if (!llvm.compactHeaders) return llvm.struct(objHeader(type.typeInfoPtr), *fields.toTypedArray())
+        val header = constValue(LLVMConstPtrToInt(permanentTag(type.typeInfoPtr).llvm, llvm.int32Type)!!)
+        val body = llvm.struct(header, *fields.toTypedArray())
+        val size = LLVMStoreSizeOfType(runtime.targetData, body.llvmType)
+        if (size >= 8) return body
+        return llvm.struct(header, *fields.toTypedArray(), Zero(LLVMArrayType(llvm.int8Type, (8 - size).toInt())!!))
     }
 
     fun createUniqueInstance(
             kind: UniqueKind, bodyType: LLVMTypeRef, typeInfo: ConstPointer): ConstPointer {
-        assert(getStructElements(bodyType).size == 1) // ObjHeader only.
+        // ObjHeader only (Kore: with compact headers, a 4-byte header and padding, which the full header covers).
+        assert(getStructElements(bodyType).size == (if (llvm.compactHeaders) 2 else 1))
         val objHeader = when (kind) {
             UniqueKind.UNIT -> objHeader(typeInfo)
             UniqueKind.EMPTY_ARRAY -> arrayHeader(typeInfo, 0)

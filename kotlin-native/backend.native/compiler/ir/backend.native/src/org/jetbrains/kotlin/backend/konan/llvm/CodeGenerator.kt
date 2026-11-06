@@ -47,7 +47,9 @@ internal class CodeGenerator(override val generationState: NativeGenerationState
     // the GC (type infos and meta objects are 32-byte aligned).
     internal val immTypeInfoMask by lazy {
         val flags = if (context.config.allocationMode == AllocationMode.CUSTOM) 31L else 3L
-        LLVMConstNot(LLVMConstInt(intPtrType, flags, 0)!!)!!
+        // Kore: compact headers keep a field in the high half of the header word.
+        if (context.config.compactHeaders) LLVMConstInt(intPtrType, 0xFFFFFFFFL and flags.inv(), 0)!!
+        else LLVMConstNot(LLVMConstInt(intPtrType, flags, 0)!!)!!
     }
 
     //-------------------------------------------------------------------------//
@@ -524,7 +526,7 @@ internal class StackLocalsManagerImpl(
             val headerSize = if (stackLocal.isArray)
                 LLVMOffsetOfElement(codegen.llvmTargetData, type, 1).toInt()
             else
-                runtime.pointerSize
+                llvm.objectHeaderSize
             val body = gep(llvm.int8Type, stackLocal.stackAllocationPtr, llvm.int32(headerSize))
             memset(body, 0, bodySize - headerSize)
             return@with
@@ -555,7 +557,7 @@ internal class StackLocalsManagerImpl(
 
             if (!refsOnly) {
                 val bodySize = LLVMSizeOfTypeInBits(codegen.llvmTargetData, type).toInt() / 8
-                val serviceInfoSize = runtime.pointerSize
+                val serviceInfoSize = llvm.objectHeaderSize
                 // Kore: an address computation the optimizer can see through (not through integers).
                 val bodyWithSkippedServiceInfoPtr = gep(llvm.int8Type, stackLocal.stackAllocationPtr, llvm.int32(serviceInfoSize))
                 memset(bodyWithSkippedServiceInfoPtr, 0, bodySize - serviceInfoSize)

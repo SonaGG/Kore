@@ -33,6 +33,7 @@ object NativeRuntimeConstants {
     const val IMMIX: String = "Kotlin_immix" // Kore
     const val COMPRESSED_REFS: String = "Kotlin_compressedRefs" // Kore
     const val COMPRESSED_REFS_ZERO_BASED: String = "Kotlin_compressedRefsZeroBased" // Kore
+    const val COMPACT_HEADERS: String = "Kotlin_compactHeaders" // Kore
     const val GC_WORD: String = "Kotlin_gcWord" // Kore
     const val PAGED_ALLOCATOR: String = "Kotlin_pagedAllocator"
 }

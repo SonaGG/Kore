@@ -35,6 +35,7 @@ extern "C" const int32_t Kotlin_conservativeStacks; // Kore
 extern "C" const int32_t Kotlin_immix; // Kore
 extern "C" const int32_t Kotlin_compressedRefs; // Kore
 extern "C" const int32_t Kotlin_compressedRefsZeroBased; // Kore
+extern "C" const int32_t Kotlin_compactHeaders; // Kore
 extern "C" const int32_t Kotlin_gcWord; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
@@ -111,6 +112,12 @@ ALWAYS_INLINE inline bool compressedRefs() noexcept {
 // Kore: compressed references are the low 32 bits of the address (the heap and the image lie below 4 GiB).
 ALWAYS_INLINE inline bool compressedRefsZeroBased() noexcept {
     return Kotlin_compressedRefsZeroBased != 0;
+}
+
+// Kore: the header word of an object (not an array) holds a 32-bit type info or meta object address (with the tag and GC
+// bits) in its low half, and the first 4-byte field of the object in its high half (docs/kore/compressed-refs.md).
+ALWAYS_INLINE inline bool compactHeaders() noexcept {
+    return Kotlin_compactHeaders != 0;
 }
 
 // Kore: small and medium objects live in Immix blocks (alloc/custom ImmixBlock.hpp).

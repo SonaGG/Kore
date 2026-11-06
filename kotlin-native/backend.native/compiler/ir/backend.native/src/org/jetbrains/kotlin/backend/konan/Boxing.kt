@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.backend.konan
 
 import llvm.*
+import org.jetbrains.kotlin.backend.konan.llvm.CodegenLlvmHelpers
 import org.jetbrains.kotlin.backend.konan.llvm.ConstValue
 import org.jetbrains.kotlin.backend.konan.llvm.StaticData
 import org.jetbrains.kotlin.backend.konan.llvm.constValue
@@ -169,7 +170,7 @@ private fun initCache(cache: BoxCache, generationState: NativeGenerationState, c
     val staticData = generationState.llvm.staticData
     val llvm = generationState.llvm
     val llvmType = kotlinType.defaultType.toLLVMType(llvm)
-    val llvmBoxType = llvm.structType(llvm.runtime.objHeaderType, llvmType)
+    val llvmBoxType = boxBodyType(llvm, llvmType)
     val [start, end] = cache.defaultRange
 
     return if (declareOnly) {
@@ -211,7 +212,7 @@ internal fun IrConstantPrimitive.toBoxCacheValue(generationState: NativeGenerati
     val [start, end] = cacheType.defaultRange
     return if (value in start..end) {
         generationState.llvm.let { llvm ->
-            val llvmType = llvm.structType(llvm.runtime.objHeaderType, when (cacheType) {
+            val llvmType = boxBodyType(llvm, when (cacheType) {
                 BoxCache.BOOLEAN -> llvm.int1Type
                 BoxCache.BYTE -> llvm.int8Type
                 BoxCache.SHORT -> llvm.int16Type
@@ -229,3 +230,12 @@ internal fun IrConstantPrimitive.toBoxCacheValue(generationState: NativeGenerati
 
 private fun createConstant(llvmType: LLVMTypeRef, value: Int): ConstValue =
         constValue(LLVMConstInt(llvmType, value.toLong(), 1)!!)
+
+// Kore: the layout of a box, as `KotlinStaticData` lays out permanent objects: with compact headers, a 4-byte header
+// followed by the value, 8 bytes at least.
+internal fun boxBodyType(llvm: CodegenLlvmHelpers, valueType: LLVMTypeRef): LLVMTypeRef {
+    if (!llvm.compactHeaders) return llvm.structType(llvm.runtime.objHeaderType, valueType)
+    val type = llvm.structType(llvm.int32Type, valueType)
+    val size = LLVMStoreSizeOfType(llvm.runtime.targetData, type)
+    return if (size >= 8) type else llvm.structType(llvm.int32Type, valueType, LLVMArrayType(llvm.int8Type, (8 - size).toInt())!!)
+}

@@ -465,11 +465,20 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
         val superFields = if (superClass != null) context.getLayoutBuilder(superClass).getFieldsInternal(llvm) else emptyList()
 
         val declaredFields = getDeclaredFields(llvm)
+        // Kore: references are 4 bytes with compressed references.
+        fun storageSize(field: FieldInfo) = with(llvm) {
+            val type = if (compressedRefs && field.type.binaryTypeIsReference()) int32Type else field.type.toLLVMType(this)
+            LLVMStoreSizeOfType(runtime.targetData, type)
+        }
         val sortedDeclaredFields = if (irClass.hasAnnotation(KonanFqNames.noReorderFields))
             declaredFields
         else
-            declaredFields.sortedByDescending {
-                with(llvm) { LLVMStoreSizeOfType(runtime.targetData, it.type.toLLVMType(this)) }
+            declaredFields.sortedByDescending { storageSize(it) }.let { sorted ->
+                // Kore: with compact headers, a 4-byte field first (when there are no inherited fields) shares the header word.
+                val packed = if (llvm.compactHeaders && superFields.isEmpty() && sorted.firstOrNull()?.let { storageSize(it) } != 4L)
+                    sorted.firstOrNull { storageSize(it) == 4L }
+                else null
+                if (packed == null) sorted else listOf(packed) + (sorted - packed)
             }
 
         return (superFields + sortedDeclaredFields).also { fields = it }

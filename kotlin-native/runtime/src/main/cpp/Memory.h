@@ -23,6 +23,7 @@
 #include "Alignment.hpp"
 #include "KAssert.h"
 #include "Common.h"
+#include "CompilerConstants.hpp"
 #include "TypeInfo.h"
 #include "PointerBits.h"
 #include "Utils.hpp"
@@ -64,8 +65,17 @@ struct ObjHeader {
   }
 
   // Kore: the type info or meta object pointer of a header word, without the tag and GC bits.
+  // Kore: with `compiler::compactHeaders()`, the high half of the header word of objects is a field (see there).
   static TypeInfo* untagged(TypeInfo* typeInfoOrMeta) noexcept {
-      return reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(typeInfoOrMeta) & ~Kotlin_objectHeaderFlagsMask);
+      uintptr_t mask = ~Kotlin_objectHeaderFlagsMask;
+      if (kotlin::compiler::compactHeaders()) mask &= 0xFFFFFFFFu;
+      return reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(typeInfoOrMeta) & mask);
+  }
+
+  // The bits of a header word that are not the type info or meta object address: the tag and GC bits, and with
+  // `compiler::compactHeaders()` the field in the high half.
+  static uintptr_t nonAddressBits(TypeInfo* typeInfoOrMeta) noexcept {
+      return reinterpret_cast<uintptr_t>(typeInfoOrMeta) ^ reinterpret_cast<uintptr_t>(untagged(typeInfoOrMeta));
   }
 
   TypeInfo* typeInfoOrMetaRelaxed() const { return kotlin::std_support::atomic_ref{typeInfoOrMeta_}.load(std::memory_order_relaxed);}

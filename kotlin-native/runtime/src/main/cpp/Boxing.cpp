@@ -61,7 +61,9 @@ inline bool isInRange(T value, T from, T to) {
 template<class T>
 OBJ_GETTER(getCachedBox, T value, KBox<T> cache[], T from) {
   uint64_t index = value - from;
-  RETURN_OBJ(&cache[index].header);
+  // Kore: with compact headers, boxes of values of 4 bytes or less take 8 bytes (the value in the high half of the header).
+  size_t stride = kotlin::compiler::compactHeaders() && sizeof(T) <= 4 ? 8 : sizeof(KBox<T>);
+  RETURN_OBJ(reinterpret_cast<ObjHeader*>(reinterpret_cast<uint8_t*>(cache) + index * stride));
 }
 
 } // namespace

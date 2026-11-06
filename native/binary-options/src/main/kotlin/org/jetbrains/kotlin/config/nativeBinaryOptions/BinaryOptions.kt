@@ -79,6 +79,10 @@ object BinaryOptions : BinaryOptionRegistry() {
     // the default there, with `compressedRefs`.
     val compressedRefsZeroBased by booleanOption()
 
+    // Kore: with zero-based compressed references, the first 4-byte field of an object shares the header word (whose high
+    // half is otherwise zero), making the header 4 bytes in effect (default: on with zero-based compressed references).
+    val compactHeaders by booleanOption()
+
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 

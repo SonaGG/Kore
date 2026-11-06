@@ -1,7 +1,7 @@
 # Kore: compressed 32-bit references and 4-byte object headers
 
 Status: compressed references implemented (`-Xbinary=compressedRefs`, gc=gen with Immix, no nursery, 64-bit MinGW and
-Linux), on by default for optimized MinGW executables, zero-based there; 4-byte headers not yet. See "Implementation" below; the design that follows is the original plan, and
+Linux), on by default for optimized MinGW executables, zero-based there, with 4-byte object headers in effect (compact headers). See "Implementation" below; the design that follows is the original plan, and
 the implementation differs where noted. It changes the in-memory object layout, but not the klib format or the Kotlin
 ABI.
 
@@ -143,3 +143,21 @@ object.
   code that compares or hashes references (identity maps).
 - 32 GiB reservations can fail under restrictive address space limits (32-bit processes, some containers). Fall back
   to a smaller reservation with a warning.
+
+## Compact headers (implemented)
+
+With zero-based compressed references, type infos and meta objects lie below 4 GiB, so the high half of an object's
+header word is always zero. `-Xbinary=compactHeaders` (the default with zero-based compressed references) gives it to
+the object's first 4-byte field instead of a type id table:
+
+- The compiler lays out object bodies as `{i32 header, fields...}` (8 bytes at least, as the runtime reads the header
+  word), and puts a 4-byte field first when the class inherits no fields. Fields sort by their stored size (4 bytes for
+  compressed references). Arrays keep their 16-byte header.
+- Type info loads mask the high half (`0xFFFFFFE0`). Permanent objects' headers are 32-bit relocations (the image is
+  linked below 4 GiB), box caches use the compact box layout (8-byte boxes for values of 4 bytes or less).
+- The runtime's C++ structures are unchanged: `ObjHeader::untagged` masks the high half, and installing or removing a
+  meta object keeps it (`ObjHeader::nonAddressBits`). The GC's header bit operations already keep the other bits.
+
+An object with three references takes 16 bytes (24 with compressed references alone, 32 originally). The Compose huge
+tree peaks at 82-95 MiB (upstream: 101 MiB), with the first composition in 115 ms (upstream: 386 ms); CPU-bound
+benchmarks are as fast as or faster than with full pointers (virtual calls 12% faster).

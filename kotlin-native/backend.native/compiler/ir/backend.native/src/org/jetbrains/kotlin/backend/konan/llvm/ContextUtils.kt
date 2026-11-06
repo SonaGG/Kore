@@ -554,6 +554,9 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     // runtime's `Kotlin_heapBase`, an address).
     val compressedRefs: Boolean = context.config.compressedRefs
     val compressedRefsZeroBased: Boolean = context.config.compressedRefsZeroBased
+    // Kore: objects (not arrays) have a 4-byte header, their first 4-byte field sharing the header word.
+    val compactHeaders: Boolean = context.config.compactHeaders
+    val objectHeaderSize: Int get() = if (compactHeaders) 4 else runtime.pointerSize
     val heapBaseGlobal by lazy {
         LLVMGetNamedGlobal(module, "Kotlin_heapBase") ?: LLVMAddGlobal(module, pointerType, "Kotlin_heapBase")!!.also {
             LLVMSetLinkage(it, LLVMLinkage.LLVMExternalLinkage)

@@ -34,7 +34,8 @@ mm::ExtraObjectData& mm::ExtraObjectData::Install(ObjHeader* object) noexcept {
     // Kore: the GC may own bits of the header word (see `Kotlin_objectHeaderFlagsMask`), and change them meanwhile: they
     // are kept, and a change of only them is retried.
     while (true) {
-        auto flags = reinterpret_cast<uintptr_t>(header) & Kotlin_objectHeaderFlagsMask;
+        // Kore: also the field in the high half of a compact header.
+        auto flags = ObjHeader::nonAddressBits(header);
         auto* desired = reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(&data) | flags);
         if (objectAtomicTypeInfo.compare_exchange_strong(header, desired)) return data;
         if (auto* metaObject = ObjHeader::AsMetaObject(header)) {
@@ -54,7 +55,7 @@ void mm::ExtraObjectData::UnlinkFromBaseObject() noexcept {
     std_support::atomic_ref objectAtomicTypeInfo{object->typeInfoOrMeta_};
     TypeInfo* header = objectAtomicTypeInfo.load(std::memory_order_relaxed);
     while (true) {
-        auto flags = reinterpret_cast<uintptr_t>(header) & Kotlin_objectHeaderFlagsMask;
+        auto flags = ObjHeader::nonAddressBits(header);
         auto* desired = reinterpret_cast<TypeInfo*>(reinterpret_cast<uintptr_t>(typeInfo_) | flags);
         if (objectAtomicTypeInfo.compare_exchange_weak(header, desired, std::memory_order_release, std::memory_order_relaxed)) break;
     }

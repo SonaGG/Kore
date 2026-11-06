@@ -274,6 +274,10 @@ class NativeSecondStageCompilationConfig(
         get() = compressedRefs && (configuration.get(BinaryOptions.compressedRefsZeroBased) ?: true) &&
                 target.family == Family.MINGW && produce == CompilerOutputKind.PROGRAM
 
+    // Kore: 4-byte object headers in effect (see `BinaryOptions.compactHeaders`), with zero-based compressed references.
+    val compactHeaders: Boolean
+        get() = compressedRefsZeroBased && (configuration.get(BinaryOptions.compactHeaders) ?: true)
+
     private val compressedRefsSupported: Boolean
         get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u &&
                 target.architecture == Architecture.X64 &&
