@@ -365,11 +365,23 @@ public actual class HashMap<K, V> private constructor(
     // Null-check for escaping extra boxing for non-nullable keys.
     // Kore: Int keys (the most common boxed keys) are hashed and compared without virtual calls, with the same result
     // as Int.hashCode and Int.equals.
-    private fun hashCodeOf(key: K): Int = if (key == null) 0 else if (key is Int) key else key.hashCode()
+    // Kore: also Char and Long keys, with the results of Char.hashCode and Long.hashCode.
+    private fun hashCodeOf(key: K): Int = when (key) {
+        null -> 0
+        is Int -> key
+        is Char -> key.code
+        is Long -> (key xor (key ushr 32)).toInt()
+        else -> key.hashCode()
+    }
 
     @Suppress("NOTHING_TO_INLINE")
     private inline fun keysEqual(key: K, stored: K): Boolean =
-        if (key is Int) stored is Int && key == stored else key == stored
+        when (key) {
+            is Int -> stored is Int && key == stored
+            is Char -> stored is Char && key == stored
+            is Long -> stored is Long && key == stored
+            else -> key == stored
+        }
     private fun slotOf(hashCode: Int): Int =
         ((hashCode * hashMultiplier) shl hashLeftShift) ushr hashShift
 
