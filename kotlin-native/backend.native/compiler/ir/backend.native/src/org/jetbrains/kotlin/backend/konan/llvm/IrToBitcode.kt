@@ -500,6 +500,10 @@ internal class CodeGeneratorVisitor(
     private inner class LoopScope(val loop: IrLoop) : StackLocalsScope() {
         val loopExit  = functionGenerationContext.basicBlock("loop_exit", loop.endLocation)
         val loopCheck = functionGenerationContext.basicBlock("loop_check", loop.condition.startLocation)
+        // Kore: every iteration ends here, polling for a safepoint before the condition is checked again. Polling at
+        // the end (rather than the start) of iterations lets LLVM hoist invariant loads from the loop body, since the
+        // poll call no longer comes before them in the first iteration.
+        val loopLatch = functionGenerationContext.basicBlock("loop_latch", loop.condition.startLocation)
 
         override fun genBreak(destination: IrBreak) {
             if (destination.loop == loop)
@@ -510,7 +514,7 @@ internal class CodeGeneratorVisitor(
 
         override fun genContinue(destination: IrContinue) {
             if (destination.loop == loop) {
-                functionGenerationContext.br(loopCheck)
+                functionGenerationContext.br(loopLatch)
             } else
                 super.genContinue(destination)
         }
@@ -1214,9 +1218,11 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.condBr(condition, loopBody, loopScope.loopExit)
 
             functionGenerationContext.positionAtEnd(loopBody)
-            loopSafePoint()
             loop.body?.generate()
+            functionGenerationContext.br(loopScope.loopLatch)
 
+            functionGenerationContext.positionAtEnd(loopScope.loopLatch)
+            loopSafePoint()
             functionGenerationContext.br(loopScope.loopCheck)
             functionGenerationContext.positionAtEnd(loopScope.loopExit)
         }
@@ -1234,8 +1240,11 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.br(loopBody)
 
             functionGenerationContext.positionAtEnd(loopBody)
-            loopSafePoint()
             loop.body?.generate()
+            functionGenerationContext.br(loopScope.loopLatch)
+
+            functionGenerationContext.positionAtEnd(loopScope.loopLatch)
+            loopSafePoint()
             functionGenerationContext.br(loopScope.loopCheck)
 
             functionGenerationContext.positionAtEnd(loopScope.loopCheck)
@@ -2436,6 +2445,9 @@ internal class CodeGeneratorVisitor(
             function: IrSimpleFunction, args: List<LLVMValueRef>,
             resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null): LLVMValueRef {
         //context.log{"evaluateSimpleFunctionCall : $tmpVariableName = ${ir2string(value)}"}
+        // Kore: the type tests of devirtualized call sites read the type info like virtual calls do (see `loadTypeInfo`).
+        if (function.symbol == context.symbols.getObjectTypeInfo && context.config.invariantTypeInfo)
+            return functionGenerationContext.loadTypeInfo(args.single())
         if (superClass == null && function.isOverridable)
             return callVirtual(function, args, resultLifetime, resultSlot)
         else

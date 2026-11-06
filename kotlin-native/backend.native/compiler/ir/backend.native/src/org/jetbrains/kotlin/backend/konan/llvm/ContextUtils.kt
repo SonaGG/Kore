@@ -435,6 +435,12 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
         LLVMSetMetadata(access, tbaaKind, tag)
     }
 
+    private val invariantLoadKind by lazy { LLVMGetMDKindIDInContext(llvmContext, "invariant.load", 14) }
+    private val emptyNode by lazy { node(llvmContext)!! }
+
+    /** Kore: marks [load] as reading memory that does not change while the load is reachable. */
+    fun setInvariantLoad(load: LLVMValueRef) = LLVMSetMetadata(load, invariantLoadKind, emptyNode)
+
     override val runtime get() = generationState.runtime
 
     init {

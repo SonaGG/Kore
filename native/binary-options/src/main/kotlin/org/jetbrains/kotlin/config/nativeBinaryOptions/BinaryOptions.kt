@@ -74,6 +74,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: store the fields of small immutable classes inline in the objects holding them (default: true).
     val valueFlattening by booleanOption()
 
+    // Kore: load type infos and their virtual and interface tables as invariant, so lookups are hoisted and shared.
+    val invariantTypeInfo by booleanOption()
+
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 

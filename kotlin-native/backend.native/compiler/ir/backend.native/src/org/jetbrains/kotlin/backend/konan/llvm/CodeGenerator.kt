@@ -205,8 +205,8 @@ private inline fun <T : FunctionGenerationContext> generateFunctionBody(
 
 internal object VirtualTablesLookup {
     private fun FunctionGenerationContext.getInterfaceTableRecord(typeInfo: LLVMValueRef, interfaceId: Int): LLVMValueRef {
-        val interfaceTableSize = load(llvm.int32Type, structGep(runtime.typeInfoType, typeInfo, 9 /* interfaceTableSize_ */))
-        val interfaceTable = load(llvm.pointerType, structGep(runtime.typeInfoType, typeInfo, 10 /* interfaceTable_ */))
+        val interfaceTableSize = loadInvariant(llvm.int32Type, structGep(runtime.typeInfoType, typeInfo, 9 /* interfaceTableSize_ */))
+        val interfaceTable = loadInvariant(llvm.pointerType, structGep(runtime.typeInfoType, typeInfo, 10 /* interfaceTable_ */))
 
         fun fastPath(): LLVMValueRef {
             // The fastest optimistic version.
@@ -256,7 +256,7 @@ internal object VirtualTablesLookup {
             // Essentially: typeInfo.itable[place(interfaceId)].id == interfaceId
             val interfaceId = dstHierarchyInfo.interfaceId
             val interfaceTableRecord = getInterfaceTableRecord(objTypeInfo, interfaceId)
-            icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), llvm.int32(interfaceId))
+            icmpEq(loadInvariant(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), llvm.int32(interfaceId))
         }
     }
 
@@ -280,16 +280,16 @@ internal object VirtualTablesLookup {
                 val index = layoutBuilder.vtableIndex(irFunction)
                 val vtable = gep(runtime.typeInfoType, typeInfoPtr, llvm.int32(1)) // typeInfoPtr + 1
                 val slot = gep(llvm.pointerType, vtable, llvm.int32(index))
-                load(llvm.pointerType, slot)
+                loadInvariant(llvm.pointerType, slot)
             }
 
             else -> {
                 // Essentially: typeInfo.itable[place(interfaceId)].vtable[method]
                 val itablePlace = layoutBuilder.itablePlace(irFunction)
                 val interfaceTableRecord = getInterfaceTableRecord(typeInfoPtr, itablePlace.interfaceId)
-                val vtable = load(llvm.pointerType, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 2 /* vtable */))
+                val vtable = loadInvariant(llvm.pointerType, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 2 /* vtable */))
                 val slot = gep(llvm.pointerType, vtable, llvm.int32(itablePlace.methodIndex))
-                load(llvm.pointerType, slot)
+                loadInvariant(llvm.pointerType, slot)
             }
         }
         return LlvmCallable(llvmMethod, llvmFunctionSignature)
@@ -1298,7 +1298,24 @@ internal abstract class FunctionGenerationContext(
         return switch
     }
 
-    fun loadTypeInfo(objPtr: LLVMValueRef): LLVMValueRef = call(llvm.getTypeInfo, listOf(objPtr))
+    fun loadTypeInfo(objPtr: LLVMValueRef): LLVMValueRef {
+        if (!context.config.invariantTypeInfo) return call(llvm.getTypeInfo, listOf(objPtr))
+        // Kore: inline `ObjHeader::type_info()` with invariant loads, so LLVM may hoist and share them (and the table
+        // lookups based on them) across calls and stores. A header only ever changes from the type info to a meta
+        // object whose first field is the same type info, so every value the loads can see yields the same result.
+        // Unordered (instead of relaxed) atomicity keeps the racy read defined while still allowing hoisting.
+        val header = loadInvariant(llvm.pointerType, objPtr, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
+        val untagged = intToPtr(and(ptrToInt(header, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)
+        return loadInvariant(llvm.pointerType, untagged, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
+    }
+
+    /** Kore: a load from memory that never changes while it is reachable (type infos and their tables). */
+    fun loadInvariant(type: LLVMTypeRef, address: LLVMValueRef, memoryOrder: LLVMAtomicOrdering? = null): LLVMValueRef {
+        val alignment = if (memoryOrder != null) LLVMABIAlignmentOfType(codegen.llvmTargetData, type) else null
+        val value = load(type, address, memoryOrder = memoryOrder, alignment = alignment)
+        if (context.config.invariantTypeInfo) llvm.setInvariantLoad(value)
+        return value
+    }
 
     /**
      * Note: the same code is generated as IR in [org.jetbrains.kotlin.backend.konan.lower.EnumUsageLowering].

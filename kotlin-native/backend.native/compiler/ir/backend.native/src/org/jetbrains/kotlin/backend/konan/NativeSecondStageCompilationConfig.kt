@@ -269,6 +269,10 @@ class NativeSecondStageCompilationConfig(
     val valueFlattening: Boolean
         get() = configuration.get(BinaryOptions.valueFlattening) ?: true
 
+    // Kore: see [BinaryOptions.invariantTypeInfo].
+    val invariantTypeInfo: Boolean
+        get() = configuration.get(BinaryOptions.invariantTypeInfo) ?: true
+
     // Kore: 0 means automatic.
     val codegenPartitions: UInt
         get() = configuration.get(BinaryOptions.codegenPartitions) ?: 0u
