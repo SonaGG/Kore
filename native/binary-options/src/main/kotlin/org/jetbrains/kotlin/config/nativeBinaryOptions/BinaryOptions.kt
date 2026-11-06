@@ -62,6 +62,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: size in MiB of the moving young generation (nursery); 0 disables it.
     val gcNurserySize by uintOption()
 
+    // Kore: Immix heap layout (bump allocation into lines of 32 KiB blocks) in the custom allocator; no nursery.
+    val immix by booleanOption()
+
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 
