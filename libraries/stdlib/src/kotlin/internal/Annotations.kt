@@ -136,3 +136,13 @@ internal annotation class JvmBuiltin
 @Target(AnnotationTarget.FILE)
 @Retention(AnnotationRetention.SOURCE)
 internal annotation class SuppressBytecodeGeneration
+
+/**
+ * Kore: the bounds checks of array accesses and the null checks in the annotated function are left out by Kotlin/Native's
+ * optimizing compilation (as with `kore.annotations.Unchecked`, but keeping its loops' safepoint polls). Only for
+ * functions whose accesses are all in bounds by construction (e.g. ranges checked up front, indices masked to the size
+ * of a lookup table). Other platforms ignore it.
+ */
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.BINARY)
+internal annotation class KoreUnchecked

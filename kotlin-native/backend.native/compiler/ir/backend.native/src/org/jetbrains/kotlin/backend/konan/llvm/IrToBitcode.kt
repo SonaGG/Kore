@@ -1207,7 +1207,7 @@ internal class CodeGeneratorVisitor(
     // ones and inlines the others, so keep it a call until then.
     private fun loopSafePoint() {
         // Kore: `@kore.annotations.Unchecked` functions do not poll in loops.
-        if (context.shouldOptimize() && (currentCodeContext.functionScope() as? FunctionScope)?.declaration?.isKoreUnchecked == true) return
+        if (context.shouldOptimize() && (currentCodeContext.functionScope() as? FunctionScope)?.declaration?.dropsLoopPolls == true) return
         val poll = call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
         LLVMAddCallSiteAttribute(poll, LLVMAttributeFunctionIndex,
                 createLlvmEnumAttribute(LLVMGetTypeContext(LLVMTypeOf(poll))!!, LlvmFunctionAttribute.NoInline.asAttributeKindId()))
@@ -2955,5 +2955,11 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleR
 // Kore: functions annotated with `@kore.annotations.Unchecked` (see `UncheckedFunctionsPass` in the Kotlin LLVM plugin).
 private val koreUncheckedFqName = org.jetbrains.kotlin.name.FqName("kore.annotations.Unchecked")
 
+// Kore: the standard library's own `kotlin.internal.KoreUnchecked` (usable in its common code), without dropping loop polls.
+private val stdlibUncheckedFqName = org.jetbrains.kotlin.name.FqName("kotlin.internal.KoreUnchecked")
+
 internal val IrFunction.isKoreUnchecked: Boolean
+    get() = hasAnnotation(koreUncheckedFqName) || hasAnnotation(stdlibUncheckedFqName)
+
+internal val IrFunction.dropsLoopPolls: Boolean
     get() = hasAnnotation(koreUncheckedFqName)
