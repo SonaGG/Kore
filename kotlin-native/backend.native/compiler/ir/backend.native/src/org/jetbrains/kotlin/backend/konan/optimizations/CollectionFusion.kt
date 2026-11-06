@@ -49,6 +49,7 @@ internal class CollectionFusion(private val context: Context, private val module
     private var currentFunction: IrFunction? = null
 
     fun run() {
+        val start = System.nanoTime()
         module.acceptVoid(object : IrVisitorVoid() {
             override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
             override fun visitFunction(declaration: IrFunction) {
@@ -56,6 +57,7 @@ internal class CollectionFusion(private val context: Context, private val module
                 lowerFunction(declaration)
             }
         })
+        if (log) println("CollectionFusion: ${(System.nanoTime() - start) / 1_000_000} ms")
     }
 
     private fun lowerFunction(function: IrFunction) {
