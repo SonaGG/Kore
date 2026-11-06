@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,6 +27,36 @@
 extern "C" void checkRangeIndexes(KInt from, KInt to, KInt size);
 
 namespace {
+
+// Kore: long copies poll between chunks of this many bytes (some microseconds), so that a thread copying a
+// big array (e.g. growing a big ArrayList) does not keep a collection waiting. Arrays this big are not in the nursery,
+// so they do not move at the polls; the callers keep them alive.
+constexpr size_t kCopyChunkBytes = 64 * 1024;
+
+// Copies `count` elements in chunks, in the direction that keeps overlapping copies right, polling between chunks.
+template <typename T, typename Copy>
+inline void copyInChunks(T* destination, const T* source, size_t count, Copy&& copy) {
+  constexpr size_t chunk = kCopyChunkBytes / sizeof(T);
+  if (count <= chunk) {
+    copy(destination, source, count);
+    return;
+  }
+  if (destination <= source) {
+    for (size_t done = 0; done < count;) {
+      size_t n = std::min(chunk, count - done);
+      copy(destination + done, source + done, n);
+      done += n;
+      if (done < count) Kotlin_mm_safePointWhileLoopBody();
+    }
+  } else {
+    for (size_t left = count; left > 0;) {
+      size_t n = std::min(chunk, left);
+      left -= n;
+      copy(destination + left, source + left, n);
+      if (left > 0) Kotlin_mm_safePointWhileLoopBody();
+    }
+  }
+}
 
 PERFORMANCE_INLINE inline void boundsCheck(const ArrayHeader* array, KInt index) {
   // We couldn't have created an array bigger than max KInt value.
@@ -41,8 +72,14 @@ inline void fillImpl(KRef thiz, KInt fromIndex, KInt toIndex, T value) {
   ArrayHeader* array = thiz->array();
   checkRangeIndexes(fromIndex, toIndex, array->count_);
   T* address = PrimitiveArrayAddressOfElementAt<T>(array, fromIndex);
-  for (KInt index = fromIndex; index < toIndex; ++index) {
-    *address++ = value;
+  // Kore: polls between chunks, like `copyInChunks`.
+  constexpr int64_t chunk = kCopyChunkBytes / sizeof(T);
+  for (int64_t start = fromIndex; start < toIndex; start += chunk) {
+    if (start != fromIndex) Kotlin_mm_safePointWhileLoopBody();
+    int64_t end = std::min<int64_t>(start + chunk, toIndex);
+    for (int64_t index = start; index < end; ++index) {
+      *address++ = value;
+    }
   }
 }
 
@@ -56,9 +93,9 @@ inline void copyImpl(KConstRef thiz, KInt fromIndex,
       toIndex < 0 || static_cast<uint32_t>(count) + toIndex > destinationArray->count_) {
       ThrowArrayIndexOutOfBoundsException();
   }
-  memmove(PrimitiveArrayAddressOfElementAt<T>(destinationArray, toIndex),
-          PrimitiveArrayAddressOfElementAt<T>(array, fromIndex),
-          count * sizeof(T));
+  copyInChunks(PrimitiveArrayAddressOfElementAt<T>(destinationArray, toIndex),
+               PrimitiveArrayAddressOfElementAt<T>(array, fromIndex), static_cast<size_t>(count),
+               [](T* to, const T* from, size_t n) { memmove(to, from, n * sizeof(T)); });
 }
 
 
@@ -144,8 +181,14 @@ KInt Kotlin_Array_getArrayLength(KConstRef thiz) {
 void Kotlin_Array_fillImpl(KRef thiz, KInt fromIndex, KInt toIndex, KRef value) {
   ArrayHeader* array = thiz->array();
   checkRangeIndexes(fromIndex, toIndex, array->count_);
-  for (KInt index = fromIndex; index < toIndex; ++index) {
-    UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, index), value);
+  // Kore: polls between chunks, like `copyInChunks`.
+  constexpr int64_t chunk = kCopyChunkBytes / sizeof(KRef);
+  for (int64_t start = fromIndex; start < toIndex; start += chunk) {
+    if (start != fromIndex) Kotlin_mm_safePointWhileLoopBody();
+    int64_t end = std::min<int64_t>(start + chunk, toIndex);
+    for (int64_t index = start; index < end; ++index) {
+      UpdateHeapRefInObject(thiz, ArrayAddressOfElementAt(array, static_cast<KInt>(index)), value);
+    }
   }
 }
 
@@ -159,8 +202,10 @@ void Kotlin_Array_copyImpl(KConstRef thiz, KInt fromIndex,
     ThrowArrayIndexOutOfBoundsException();
   }
   if (count > 0) {
-    CopyHeapRefsInObject(destination, ArrayAddressOfElementAt(destinationArray, toIndex),
-                         ArrayAddressOfElementAt(array, fromIndex), count);
+    copyInChunks(ArrayAddressOfElementAt(destinationArray, toIndex), ArrayAddressOfElementAt(array, fromIndex),
+                 static_cast<size_t>(count), [destination](KRef* to, const KRef* from, size_t n) {
+                   CopyHeapRefsInObject(destination, to, from, static_cast<uint32_t>(n));
+                 });
   }
 }
 
