@@ -103,7 +103,7 @@ public actual class HashMap<K, V> private constructor(
 
     // Kore: the hash code of the key at each index, compared before the keys themselves (as JVM and other hash tables
     // do): a probe of another key then does not touch that key, and rehashing does not call hashCode again.
-    private var keyHashes: IntArray = IntArray(keysArray.size)
+    private var keyHashes: IntArray = if (keysArray.isEmpty()) EMPTY_INTS else IntArray(keysArray.size)
 
     /**
      * The number of times this map is structurally modified.
@@ -132,7 +132,18 @@ public actual class HashMap<K, V> private constructor(
     /**
      * Creates a new empty [HashMap].
      */
-    public actual constructor() : this(INITIAL_CAPACITY)
+    @Suppress("UNCHECKED_CAST")
+    public actual constructor() : this(
+        // Kore: no storage until the first entry (as Java's HashMap): many maps stay empty (e.g. the children of the leaves
+        // of a tree). The shared hash array has no keys, so lookups find nothing, and the first insertion grows the map
+        // to INITIAL_CAPACITY (see ensureCapacity) before writing anything.
+        EMPTY_KEYS as Array<K>,
+        null,
+        EMPTY_INTS,
+        EMPTY_HASH,
+        INITIAL_MAX_PROBE_DISTANCE,
+        0
+    )
 
     /**
      * Creates a new empty [HashMap] with the specified initial capacity.
@@ -330,7 +341,8 @@ public actual class HashMap<K, V> private constructor(
         if (minCapacity > this.capacity) {
             // Kore: the capacity doubles (as JVM's tables do), which halves the copying of a growing map's arrays
             // compared to growing by half.
-            val newSize = AbstractList.newCapacity(this.capacity, minCapacity.coerceAtLeast(this.capacity * 2).let {
+            // Kore: from no storage (see the constructor) straight to INITIAL_CAPACITY.
+            val newSize = if (this.capacity == 0) maxOf(minCapacity, INITIAL_CAPACITY) else AbstractList.newCapacity(this.capacity, minCapacity.coerceAtLeast(this.capacity * 2).let {
                 if (it < 0) minCapacity else it
             })
             keysArray = keysArray.copyOfUninitializedElements(newSize)
@@ -965,3 +977,9 @@ internal class HashMapEntrySet<K, V> internal constructor(
  * @param V the type of map values. The mutable map is invariant in its value type.
  */
 public actual typealias LinkedHashMap<K, V> = HashMap<K, V>
+
+// Kore: the storage of maps created without a capacity until their first entry (never written to). The hash array has
+// the size `computeHashSize(0)` gives (all empty slots).
+private val EMPTY_KEYS = arrayOfNulls<Any?>(0)
+private val EMPTY_INTS = IntArray(0)
+private val EMPTY_HASH = IntArray(2)
