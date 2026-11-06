@@ -4,6 +4,7 @@
  */
 
 #include "GCImpl.hpp"
+#include "MemoryMove.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -70,6 +71,9 @@ ALWAYS_INLINE bool isYoungHeapObject(ObjHeader* object) noexcept {
              // of them into old objects during its concurrent mark must be remembered for the next young collection.
              alloc::nursery::movable(object));
 }
+
+// Kore: the longest copy of references scanned for young values (see copyHeapRefsInObject).
+constexpr size_t kCopyScanLimit = 64;
 
 ALWAYS_INLINE void rememberIfOldToYoung(ObjHeader* holder, ObjHeader* value) noexcept {
     if (__builtin_expect(!holder->heap(), false)) return; // Stack objects are roots; permanent objects are immutable.
@@ -1098,8 +1102,18 @@ void gc::copyHeapRefsInObject(ObjHeader* holder, ObjHeader** destination, ObjHea
         }
         return;
     }
-    std::memmove(destination, source, count * sizeof(ObjHeader*));
-    if (!holder->heap() || !gc::objectBits(holder).oldOrSurviving()) return;
+    kotlin::moveMemory(destination, source, count * sizeof(ObjHeader*));
+    if (!holder->heap()) return;
+    auto holderData = gc::objectBits(holder);
+    if (!holderData.oldOrSurviving()) return;
+    // Kore: a remembered holder is rescanned whole at the next young collection: nothing to look for. Otherwise a short
+    // copy is scanned for a young value, and a long one (e.g. a gap buffer moving mostly old objects, whose headers the
+    // scan would all load) remembers the holder outright, like a card mark: the next young collection rescans it.
+    if ((holderData.load() & gc::ObjectBits::kRemembered) != 0) return;
+    if (count > kCopyScanLimit) {
+        if (holderData.tryRemember()) rememberObject(holder);
+        return;
+    }
     for (size_t i = 0; i < count; ++i) {
         if (isYoungHeapObject(destination[i])) {
             rememberIfOldToYoung(holder, destination[i]);

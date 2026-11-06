@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "KAssert.h"
+#include "MemoryMove.hpp"
 #include "MemorySearch.hpp"
 #include "AllocationHints.hpp"
 #include "Exceptions.h"
@@ -115,16 +116,24 @@ inline void copyImpl(KConstRef thiz, KInt fromIndex,
   }
   copyInChunks(PrimitiveArrayAddressOfElementAt<T>(destinationArray, toIndex),
                PrimitiveArrayAddressOfElementAt<T>(array, fromIndex), static_cast<size_t>(count),
-               [](T* to, const T* from, size_t n) { memmove(to, from, n * sizeof(T)); });
+               [](T* to, const T* from, size_t n) { kotlin::moveMemory(to, from, n * sizeof(T)); });
 }
 
+
+// Kore: primitive array elements are accessed as the member of this struct, so that their type-based alias analysis tag
+// differs from the one of the compiled code's primitive fields (see `tbaaTags` in the compiler): a store to an IntArray
+// element does not make LLVM reload Int fields, nor the other way around.
+template <typename T>
+struct KotlinArrayElement {
+  T value;
+};
 
 template <class T, bool BoundsCheck = true>
 inline void PrimitiveArraySet(KRef thiz, KInt index, T value) {
   ArrayHeader* array = thiz->array();
   if (BoundsCheck)
     boundsCheck(array, index);
-  *PrimitiveArrayAddressOfElementAt<T>(array, index) = value;
+  reinterpret_cast<KotlinArrayElement<T>*>(PrimitiveArrayAddressOfElementAt<T>(array, index))->value = value;
 }
 
 template <class T, bool BoundsCheck = true>
@@ -132,7 +141,7 @@ inline T PrimitiveArrayGet(KConstRef thiz, KInt index) {
   const ArrayHeader* array = thiz->array();
   if (BoundsCheck)
     boundsCheck(array, index);
-  return *PrimitiveArrayAddressOfElementAt<T>(array, index);
+  return reinterpret_cast<const KotlinArrayElement<T>*>(PrimitiveArrayAddressOfElementAt<T>(array, index))->value;
 }
 
 template<bool BoundsCheck = true>
