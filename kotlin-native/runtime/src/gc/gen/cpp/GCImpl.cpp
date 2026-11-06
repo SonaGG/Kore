@@ -1138,9 +1138,15 @@ PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard::~ExternalRCRefReleas
 PERFORMANCE_INLINE gc::barriers::ExternalRCRefReleaseGuard& gc::barriers::ExternalRCRefReleaseGuard::ExternalRCRefReleaseGuard::operator=(
         ExternalRCRefReleaseGuard&&) noexcept = default;
 
+// Kore: whether heap objects have a GC word: always if the GC bits are in it, else as compiled (the compiler drops it only
+// with Immix and no nursery, which uses it for forwarding).
+ALWAYS_INLINE bool gc::internal::gcWordAllocated() noexcept {
+    return compiler::gcWord() || !ObjectBits::inHeader() || compiler::gcNurserySize() > 0 || !compiler::immix();
+}
+
 // static
 ALWAYS_INLINE uint64_t type_layout::descriptor<gc::GC::ObjectData>::type::size() noexcept {
-    return sizeof(gc::GC::ObjectData);
+    return gc::internal::gcWordAllocated() ? sizeof(gc::GC::ObjectData) : 0;
 }
 
 // static
@@ -1150,6 +1156,8 @@ ALWAYS_INLINE size_t type_layout::descriptor<gc::GC::ObjectData>::type::alignmen
 
 // static
 ALWAYS_INLINE gc::GC::ObjectData* type_layout::descriptor<gc::GC::ObjectData>::type::construct(uint8_t* ptr) noexcept {
+    // Kore: without a GC word, `ptr` is the object itself.
+    if (!gc::internal::gcWordAllocated()) return reinterpret_cast<gc::GC::ObjectData*>(ptr);
     return new (ptr) gc::GC::ObjectData();
 }
 

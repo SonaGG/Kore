@@ -176,13 +176,14 @@ def _type_info(value):
     logging.debug("%s: %s", value_str, value.GetTypeName())
     if value.GetTypeName() != "ObjHeader *":
         return None
+    # Kore: header bits 2-4 may hold GC bits (with the custom allocator, see `Kotlin_objectHeaderFlagsMask`).
     result = _evaluate(
         (
-            f"*(void **)((uintptr_t)(*(void**){value_str}) & ~0x3)"
+            f"*(void **)((uintptr_t)(*(void**){value_str}) & ~0x1f)"
             f" == "
-            f"**(void***)((uintptr_t)(*(void**){value_str}) & ~0x3)"
+            f"**(void***)((uintptr_t)(*(void**){value_str}) & ~0x1f)"
             f" ? "
-            f"*(void **)((uintptr_t)(*(void**){value_str}) & ~0x3)"
+            f"*(void **)((uintptr_t)(*(void**){value_str}) & ~0x1f)"
             f" : "
             f"(void *)0"
         )

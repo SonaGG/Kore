@@ -251,6 +251,14 @@ class NativeSecondStageCompilationConfig(
     val immix: Boolean
         get() = configuration.get(BinaryOptions.immix) ?: (gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM)
 
+    // Kore: whether heap objects have a GC word before them. The generational GC with the custom allocator keeps its bits
+    // in the object header (see `immTypeInfoMask`); the word is then only needed by the nursery (forwarding addresses) and
+    // by paged allocation (free lists in free blocks).
+    val gcWordSupportedOff: Boolean
+        get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u
+    val gcWord: Boolean
+        get() = (configuration.get(BinaryOptions.gcWord) ?: true) || !gcWordSupportedOff
+
     // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively. On by default where the
     // runtime can find the stack bounds and save the registers (64-bit x86 and ARM, except arm64_32).
     val conservativeStacks: Boolean

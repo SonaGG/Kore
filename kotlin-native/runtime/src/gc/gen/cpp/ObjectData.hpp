@@ -136,6 +136,8 @@ extern std::atomic<bool> youngCollection;
 inline bool isYoungCollection() noexcept { return youngCollection.load(std::memory_order_relaxed); }
 // Kore: the number of slices of big arrays waiting to be marked (see `GC::processArrayInMark`).
 extern std::atomic<size_t> markArraySlicesPending;
+// Kore: whether heap objects have a `GC::ObjectData` word before them.
+bool gcWordAllocated() noexcept;
 } // namespace internal
 static_assert(sizeof(GC::ObjectData) == sizeof(void*));
 static_assert(kObjectAlignment >= 8, "forwarding addresses must leave the low 3 bits free");

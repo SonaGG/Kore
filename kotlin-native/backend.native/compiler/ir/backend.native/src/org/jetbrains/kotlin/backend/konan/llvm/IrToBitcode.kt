@@ -2945,6 +2945,7 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleR
         setRuntimeConstGlobal(NativeRuntimeConstants.GC_NURSERY_SIZE, config.gcNurserySize.toInt().toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.CONSERVATIVE_STACKS, config.conservativeStacks.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.IMMIX, config.immix.toLlvmConstInt32())
+        setRuntimeConstGlobal(NativeRuntimeConstants.GC_WORD, config.gcWord.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.PAGED_ALLOCATOR, config.pagedAllocator.toLlvmConstInt32())
     }
 

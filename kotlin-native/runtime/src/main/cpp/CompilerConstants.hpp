@@ -33,6 +33,7 @@ extern "C" const int32_t Kotlin_gcYoungGenerationSize; // Kore
 extern "C" const int32_t Kotlin_gcNurserySize; // Kore
 extern "C" const int32_t Kotlin_conservativeStacks; // Kore
 extern "C" const int32_t Kotlin_immix; // Kore
+extern "C" const int32_t Kotlin_gcWord; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
 class SourceInfo;
@@ -103,6 +104,12 @@ ALWAYS_INLINE inline int32_t gcNurserySize() noexcept {
 // Kore: small and medium objects live in Immix blocks (alloc/custom ImmixBlock.hpp).
 ALWAYS_INLINE inline bool immix() noexcept {
     return Kotlin_immix != 0;
+}
+
+// Kore: whether heap objects get a GC word before them (gc/gen ObjectData.hpp). Only the generational GC with the
+// custom allocator, Immix and no nursery can do without it; the compiler keeps it in other configurations.
+ALWAYS_INLINE inline bool gcWord() noexcept {
+    return Kotlin_gcWord != 0;
 }
 ALWAYS_INLINE inline bool pagedAllocator() noexcept {
     return Kotlin_pagedAllocator != 0;
