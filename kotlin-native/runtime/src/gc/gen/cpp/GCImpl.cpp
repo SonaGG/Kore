@@ -242,11 +242,24 @@ void neutralize(ObjHeader* object) noexcept {
 namespace {
 
 // Kore: debugging (`KORE_GC_VERIFY` set): after an evacuation, no reachable object may refer to a released nursery block.
+// Debugging: the memory of the objects moved by the last evacuation, sorted.
+[[clang::no_destroy]] std::vector<std::pair<uintptr_t, uintptr_t>> gDebugMovedFrom;
+
 void verifyAfterEvacuation() noexcept {
     std::vector<ObjHeader*> stack;
     std::unordered_set<ObjHeader*> visited;
     auto visit = [&](ObjHeader* object, const char* from, ObjHeader* holder) {
         if (object == nullptr || isNullOrMarker(object)) return;
+        {
+            auto word = reinterpret_cast<uintptr_t>(object);
+            auto moved = std::upper_bound(gDebugMovedFrom.begin(), gDebugMovedFrom.end(), std::make_pair(word, ~uintptr_t(0)));
+            if (moved != gDebugMovedFrom.begin() && word < (moved - 1)->second) {
+                konan::consoleErrorf("kore-gc-verify: reference to moved object %p from %s %p (type %p, retained %d, nursery %d)\n",
+                                     object, from, holder, holder != nullptr ? holder->type_info() : nullptr,
+                                     holder != nullptr && alloc::nursery::inRetainedBlock(holder), holder != nullptr && alloc::nursery::movable(holder));
+                std::abort();
+            }
+        }
         if (alloc::nursery::inFreeBlock(object)) {
             uintptr_t word = holder != nullptr && holder->heap() ? alloc::objectDataForObject(holder).word() : 0;
             uint32_t count = holder != nullptr && holder->type_info()->IsArray() ? holder->array()->count_ : 0;
@@ -257,11 +270,73 @@ void verifyAfterEvacuation() noexcept {
                     holder != nullptr && alloc::nursery::inRetainedBlock(holder), holder != nullptr && alloc::nursery::movable(holder), alloc::nursery::releaseKind(object));
             std::abort();
         }
+        {
+            // A referred object must have a valid header (its type info points to itself).
+            auto header = reinterpret_cast<uintptr_t>(object->typeInfoOrMetaRelaxed());
+            auto* typeInfo = reinterpret_cast<const TypeInfo*>(header & ~uintptr_t(OBJECT_TAG_MASK));
+            bool valid = typeInfo != nullptr && (header & OBJECT_TAG_MASK) != 2 && reinterpret_cast<uintptr_t>(typeInfo) > 4096 &&
+                    reinterpret_cast<uintptr_t>(typeInfo) < (uintptr_t(1) << 47) && (reinterpret_cast<uintptr_t>(typeInfo) & 7) == 0 &&
+                    typeInfo->typeInfo_ != nullptr && typeInfo->typeInfo_->typeInfo_ == typeInfo->typeInfo_;
+            if (!valid) {
+                konan::consoleErrorf("kore-gc-verify: reference to an invalid object %p (header %p) from %s %p (type %p, retained %d, "
+                                     "nursery %d)\n",
+                                     object, reinterpret_cast<void*>(header), from, holder, holder != nullptr ? holder->type_info() : nullptr,
+                                     holder != nullptr && alloc::nursery::inRetainedBlock(holder), holder != nullptr && alloc::nursery::movable(holder));
+                if (holder != nullptr) {
+                    size_t index = 0;
+                    traverseReferredObjects(holder, [&](ObjHeader* field) {
+                        if (field == object) konan::consoleErrorf("kore-gc-verify:   it is reference #%zu of the holder\n", index);
+                        ++index;
+                    });
+                    auto* words = reinterpret_cast<const uintptr_t*>(&alloc::objectDataForObject(holder));
+                    for (size_t i = 0; i < 6; ++i) konan::consoleErrorf("kore-gc-verify:   holder word %zu: %p\n", i, reinterpret_cast<void*>(words[i]));
+                }
+                auto* around = reinterpret_cast<const uintptr_t*>(reinterpret_cast<uintptr_t>(object) & ~uintptr_t(7)) - 2;
+                for (size_t i = 0; i < 6; ++i) konan::consoleErrorf("kore-gc-verify:   target word %d: %p\n", static_cast<int>(i) - 2, reinterpret_cast<void*>(around[i]));
+                konan::consoleErrorf("kore-gc-verify:   (verifyAfterEvacuation at %p)\n", reinterpret_cast<void*>(&verifyAfterEvacuation));
+                std::abort();
+            }
+        }
         if (!object->heap()) return;
         if (visited.insert(object).second) stack.push_back(object);
     };
     for (auto& thread : mm::ThreadRegistry::Instance().LockForIter()) {
         for (auto value : mm::ThreadRootSet(thread)) visit(value.object, "thread root", nullptr);
+        // Stack words and saved registers must not refer to a block this collection released: what they refer to was
+        // pinned.
+        auto& suspension = thread.suspensionData();
+        auto check = [&](uintptr_t word, const char* where, uintptr_t at) {
+            auto moved = std::upper_bound(gDebugMovedFrom.begin(), gDebugMovedFrom.end(), std::make_pair(word, ~uintptr_t(0)));
+            if (moved != gDebugMovedFrom.begin() && word < (moved - 1)->second) {
+                konan::consoleErrorf("kore-gc-verify: %s %p refers to moved object memory [%p, %p): %p\n", where, reinterpret_cast<void*>(at),
+                                     reinterpret_cast<void*>((moved - 1)->first), reinterpret_cast<void*>((moved - 1)->second), reinterpret_cast<void*>(word));
+            }
+            if (alloc::nursery::inFreeBlock(reinterpret_cast<void*>(word)) && alloc::nursery::releaseKind(reinterpret_cast<void*>(word)) == 1) {
+                konan::consoleErrorf("kore-gc-verify: %s %p (sp %p, base %p) refers to a just released nursery block: %p\n", where,
+                                     reinterpret_cast<void*>(at), reinterpret_cast<void*>(suspension.savedStackPointer()),
+                                     reinterpret_cast<void*>(suspension.stackBase()), reinterpret_cast<void*>(word));
+            }
+        };
+        std::vector<ObjHeader**> candidates;
+        for (uintptr_t address = suspension.savedStackPointer() & ~uintptr_t(7); address + sizeof(uintptr_t) <= suspension.stackBase();
+             address += sizeof(uintptr_t)) {
+            uintptr_t word = *reinterpret_cast<const uintptr_t*>(address);
+            check(word, "stack word at", address);
+            candidates.push_back(reinterpret_cast<ObjHeader**>(word));
+        }
+        for (size_t i = 0; i < mm::ThreadSuspensionData::kSavedRegisters; ++i) {
+            check(suspension.savedRegisters()[i], "register", i);
+            candidates.push_back(reinterpret_cast<ObjHeader**>(suspension.savedRegisters()[i]));
+        }
+        // What the stack refers to (conservatively): pinned nursery objects stay in retained blocks.
+        for (ObjHeader** candidate : candidates) {
+            if (ObjHeader* object = alloc::nursery::retainedObjectContaining(reinterpret_cast<uintptr_t>(candidate))) {
+                visit(object, "stack (retained)", nullptr);
+            }
+        }
+        mm::GlobalData::Instance().allocator().forEachHeapSlot(candidates, [&](ObjHeader**, ObjHeader* object) noexcept {
+            visit(object, "stack (heap)", nullptr);
+        });
     }
     for (auto value : mm::GlobalRootSet()) {
         visit(value.object, value.source == mm::GlobalRootSet::Source::kGlobal ? "global" : "stable ref", nullptr);
@@ -420,6 +495,15 @@ void gc::internal::GenerationalGC::evacuateNursery() noexcept {
             if (data.forwarded()) *slot = data.forwardee();
         }
         slots->clear();
+    }
+    static const bool verifyMoves = std::getenv("KORE_GC_VERIFY") != nullptr;
+    if (verifyMoves) {
+        gDebugMovedFrom.clear();
+        for (const auto& move : moves) {
+            auto start = reinterpret_cast<uintptr_t>(move.from) - move.offset;
+            gDebugMovedFrom.push_back({start, start + move.bytes});
+        }
+        std::sort(gDebugMovedFrom.begin(), gDebugMovedFrom.end());
     }
     for (const auto& move : moves) {
         std::memcpy(reinterpret_cast<uint8_t*>(move.to) - move.offset, reinterpret_cast<uint8_t*>(move.from) - move.offset, move.bytes);

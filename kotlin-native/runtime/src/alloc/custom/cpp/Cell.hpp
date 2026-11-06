@@ -11,8 +11,9 @@
 
 namespace kotlin::alloc {
 
-// All allocations are whole units of cells.
-class Cell {
+// All allocations are whole units of cells. Kore: 8-aligned, so that the objects in it are (also after other fields of
+// the page, e.g. `NextFitPage::liveFraction_`).
+class alignas(8) Cell {
 public:
     explicit Cell(uint32_t size) noexcept;
 

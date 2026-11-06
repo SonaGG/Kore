@@ -6,6 +6,7 @@
 #include "Nursery.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #if KONAN_WINDOWS
@@ -14,6 +15,7 @@
 #include <sys/mman.h>
 #endif
 
+#include "AllocationSize.hpp"
 #include "CompilerConstants.hpp"
 #include "GCApi.hpp"
 #include "KAssert.h"
@@ -36,8 +38,11 @@ uint8_t* reserve(size_t bytes) noexcept {
 #endif
 }
 
+// The memory an object takes in a block: its size rounded up as allocation does (e.g. a byte array whose size is not a
+// multiple of the allocation unit), so that the next object starts right after.
 size_t objectBytes(uint8_t* heapObject) noexcept {
-    return alloc::CustomHeapObject::from(*reinterpret_cast<gc::GC::ObjectData*>(heapObject)).size();
+    auto size = alloc::CustomHeapObject::from(*reinterpret_cast<gc::GC::ObjectData*>(heapObject)).size();
+    return alloc::AllocationSize::bytesAtLeast(size).inBytes();
 }
 
 ObjHeader* objectAt(uint8_t* heapObject) noexcept {
@@ -85,6 +90,19 @@ bool alloc::Nursery::takeBlock(uint8_t*& start, uint8_t*& end) noexcept {
     states_[block].store(BlockState::kActive, std::memory_order_relaxed);
     start = blockStart(block);
     end = start + kBlockSize;
+    // Kore: debugging (`KORE_GC_VERIFY`): a released block is cleared; a write through a stale reference shows up here.
+    static const bool verify = std::getenv("KORE_GC_VERIFY") != nullptr;
+    if (verify) {
+        auto* words = reinterpret_cast<const uintptr_t*>(start);
+        for (size_t i = 0; i < kBlockSize / sizeof(uintptr_t); ++i) {
+            if (words[i] != 0) {
+                konan::consoleErrorf("kore-gc-verify: released nursery block %p (released by %d) written at +%zu: %p (next %p)\n",
+                                     start, releaseKinds_[block], i * sizeof(uintptr_t), reinterpret_cast<void*>(words[i]),
+                                     reinterpret_cast<void*>(i + 1 < kBlockSize / sizeof(uintptr_t) ? words[i + 1] : 0));
+                std::abort();
+            }
+        }
+    }
     return true;
 }
 
