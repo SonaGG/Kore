@@ -290,6 +290,10 @@ class NativeSecondStageCompilationConfig(
     val suspendFastPath: Boolean
         get() = configuration.get(BinaryOptions.suspendFastPath) ?: true
 
+    // Kore: see [org.jetbrains.kotlin.backend.konan.lower.PrimitiveCollections].
+    val primitiveCollections: Boolean
+        get() = configuration.get(BinaryOptions.primitiveCollections) ?: true
+
     // Kore: see [BinaryOptions.invariantTypeInfo].
     val invariantTypeInfo: Boolean
         get() = configuration.get(BinaryOptions.invariantTypeInfo) ?: true

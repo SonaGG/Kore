@@ -87,6 +87,9 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: call suspend functions that can never suspend as plain functions, without a continuation (default: true).
     val suspendFastPath by booleanOption()
 
+    // Kore: replace local HashMap<Int, Int>s with maps that keep primitives, without boxing (default: true).
+    val primitiveCollections by booleanOption()
+
     // Kore: load type infos and their virtual and interface tables as invariant, so lookups are hoisted and shared.
     val invariantTypeInfo by booleanOption()
 

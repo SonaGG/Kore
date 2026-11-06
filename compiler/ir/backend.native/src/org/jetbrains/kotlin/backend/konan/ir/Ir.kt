@@ -111,6 +111,8 @@ private object ClassIds {
 
     // Special standard library classes
     val stringBuilder = ClassId(StandardNames.TEXT_PACKAGE_FQ_NAME, Name.identifier("StringBuilder"))
+    // Kore: see `PrimitiveCollections`.
+    val intIntHashMap = ClassId(StandardNames.COLLECTIONS_PACKAGE_FQ_NAME, Name.identifier("IntIntHashMap"))
     val enumEntries = ClassId(FqName("kotlin.enums"), Name.identifier("EnumEntries"))
     val continuation = ClassId(StandardNames.COROUTINES_PACKAGE_FQ_NAME, Name.identifier("Continuation"))
     val cancellationException = ClassId.topLevel(KonanFqNames.cancellationException)
@@ -505,6 +507,9 @@ class BackendNativeSymbols(
     val throwIllegalArgumentExceptionWithMessage by CallableIds.throwIllegalArgumentExceptionWithMessage.functionSymbol()
 
     override val stringBuilder = ClassIds.stringBuilder.classSymbol()
+
+    // Kore: see `PrimitiveCollections` (looked up here so that the linker deserializes it).
+    val intIntHashMap = ClassIds.intIntHashMap.classSymbol()
 
     private val arrays = irBuiltIns.arrays
     private fun arrayToExtensionSymbolMap(callableId: CallableId, condition: (IrFunction) -> Boolean = { true }): Lazy<Map<IrClassSymbol, IrSimpleFunctionSymbol>> {
