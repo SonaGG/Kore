@@ -729,12 +729,15 @@ private constructor (private var array: CharArray) : CharSequence, Appendable {
         ensureCapacityInternal(_length + n)
     }
 
+    // Kore: the check is kept small enough to be inlined into every append; growing is out of line.
     private fun ensureCapacityInternal(minCapacity: Int) {
+        if (minCapacity > array.size || minCapacity < 0) grow(minCapacity)
+    }
+
+    private fun grow(minCapacity: Int) {
         if (minCapacity < 0) throw OutOfMemoryError()    // overflow
-        if (minCapacity > array.size) {
-            val newSize = AbstractList.newCapacity(array.size, minCapacity)
-            array = array.copyOf(newSize)
-        }
+        val newSize = AbstractList.newCapacity(array.size, minCapacity)
+        array = array.copyOf(newSize)
     }
 
     private fun checkReplaceRange(startIndex: Int, endIndex: Int, length: Int) {
