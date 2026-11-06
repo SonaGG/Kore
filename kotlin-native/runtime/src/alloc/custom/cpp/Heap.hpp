@@ -21,6 +21,7 @@
 #include "PageStore.hpp"
 #include "FixedBlockPage.hpp"
 #include "GCApi.hpp"
+#include "ImmixBlockStore.hpp"
 
 namespace kotlin::alloc {
 
@@ -51,6 +52,9 @@ public:
     FixedBlockPage* GetFixedBlockExtraObjectPage(FinalizerQueue& finalizerQueue) noexcept;
     SingleObjectPage* GetSingleExtraObjectPage() noexcept;
 
+    // Kore: memory v2, see ImmixBlockStore.hpp.
+    ImmixBlockStore& immixBlocks() noexcept { return immixBlocks_; }
+
     void AddToFinalizerQueue(FinalizerQueue queue) noexcept;
     FinalizerQueue ExtractFinalizerQueue() noexcept;
 
@@ -79,6 +83,11 @@ public:
                 process(reinterpret_cast<CustomHeapObject*>(block)->object());
             });
         });
+        immixBlocks_.TraverseBlocks([process](ImmixBlock* block) {
+            block->TraverseAllocatedBlocks([process](uint8_t* object) {
+                process(reinterpret_cast<CustomHeapObject*>(object)->object());
+            });
+        });
     }
 
     template <typename T>
@@ -101,6 +110,7 @@ private:
     PageStore<SingleObjectPage, ObjectSweepTraits> singleObjectPages_;
     PageStore<FixedBlockPage, ExtraDataSweepTraits> fixedBlockExtraObjectPages_;
     PageStore<SingleObjectPage, ExtraDataSweepTraits> singleExtraObjectPages_;
+    ImmixBlockStore immixBlocks_;
 
     FinalizerQueue pendingFinalizerQueue_;
     std::mutex pendingFinalizerQueueMutex_;

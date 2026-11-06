@@ -34,9 +34,14 @@ ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
     auto descriptor = CustomHeapObject::descriptorFrom(typeInfo);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
     bool hasFinalizer = typeInfo->flags_ & TF_HAS_FINALIZER;
-    // Kore: objects with finalizers never move (their extra object data points back to them).
-    uint8_t* memory = hasFinalizer ? nullptr : TryAllocateInNursery(size);
-    if (memory == nullptr) memory = Allocate(size);
+    uint8_t* memory;
+    if (compiler::immix()) {
+        memory = AllocateInImmix(size);
+    } else {
+        // Kore: objects with finalizers never move (their extra object data points back to them).
+        memory = hasFinalizer ? nullptr : TryAllocateInNursery(size);
+        if (memory == nullptr) memory = Allocate(size);
+    }
     auto& heapObject = *descriptor.construct(memory);
     ObjHeader* object = heapObject.object();
     if (hasFinalizer) {
@@ -55,8 +60,13 @@ ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t cou
     RuntimeAssert(typeInfo->IsArray(), "Must be an array");
     auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
     auto size = AllocationSize::bytesAtLeast(descriptor.size());
-    uint8_t* memory = TryAllocateInNursery(size);
-    if (memory == nullptr) memory = Allocate(size);
+    uint8_t* memory;
+    if (compiler::immix()) {
+        memory = AllocateInImmix(size);
+    } else {
+        memory = TryAllocateInNursery(size);
+        if (memory == nullptr) memory = Allocate(size);
+    }
     auto& heapArray = *descriptor.construct(memory);
     ArrayHeader* array = heapArray.array();
     array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
@@ -101,6 +111,7 @@ uint8_t* CustomAllocator::RefillNursery(size_t bytes) noexcept {
 void CustomAllocator::PrepareForGC() noexcept {
     CustomAllocInfo("CustomAllocator@%p::PrepareForGC()", this);
     RetireNursery();
+    ResetImmix();
     nextFitPage_ = nullptr;
     memset(fixedBlockPages_, 0, sizeof(fixedBlockPages_));
     extraObjectPage_ = nullptr;
@@ -115,6 +126,10 @@ uint8_t* CustomAllocator::Allocate(AllocationSize size) noexcept {
     RuntimeAssert(size > AllocationSize::cells(0), "CustomAllocator::Allocate cannot allocate 0 bytes");
     CustomAllocDebug("CustomAllocator::Allocate(%" PRIu64 ")", size.inBytes());
     uint64_t cellCount = size.inCells();
+    if (compiler::immix()) {
+        if (size.inBytes() <= ImmixBlock::kMaxObjectBytes) return AllocateInImmix(size);
+        return AllocateLargerThanImmix(cellCount);
+    }
     if (!compiler::pagedAllocator()) {
         return AllocateInSingleObjectPage(cellCount);
     }
@@ -125,6 +140,73 @@ uint8_t* CustomAllocator::Allocate(AllocationSize size) noexcept {
         return AllocateInSingleObjectPage(cellCount);
     }
     return AllocateInNextFitPage(cellCount);
+}
+
+uint8_t* CustomAllocator::AllocateLargerThanImmix(uint64_t cellCount) noexcept {
+    // Kore: objects of up to a next-fit page stay in next-fit pages. Giving each of them a single-object page (system
+    // memory per object) made array-growing code slower and the young pauses longer: resolving remembered slots and
+    // conservative references walks every page.
+    if (compiler::pagedAllocator() && cellCount <= static_cast<uint64_t>(NextFitPage::maxBlockSize())) {
+        return AllocateInNextFitPage(static_cast<uint32_t>(cellCount));
+    }
+    return AllocateInSingleObjectPage(cellCount);
+}
+
+void CustomAllocator::ResetImmix() noexcept {
+    immixCursor_ = immixLimit_ = nullptr;
+    immixBlock_ = nullptr;
+    immixNextLine_ = 0;
+    overflowCursor_ = overflowLimit_ = nullptr;
+}
+
+void CustomAllocator::TakeImmixHole(ImmixBlock* block, uint8_t* start, uint8_t* end, uint8_t*& cursor, uint8_t*& limit) noexcept {
+    if (!block->Zeroed()) std::memset(start, 0, end - start);
+    block->SetUsed();
+    cursor = start;
+    limit = end;
+    auto bytes = static_cast<size_t>(end - start);
+    block->RecordedBytes() += bytes;
+    // Notify last: the scheduler may suspend this thread for a collection, whose `PrepareForGC` drops the hole (the
+    // block is swept with the others allocated into). Callers retry from the allocator's fields afterwards.
+    heap_.allocatedSizeTracker().recordDifferenceAndNotifyScheduler(static_cast<std::ptrdiff_t>(bytes));
+}
+
+uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size) noexcept {
+    size_t bytes = size.inBytes();
+    if (bytes > ImmixBlock::kMaxObjectBytes) return AllocateLargerThanImmix(size.inCells());
+    // Kore: medium objects don't skip holes that are too small for them (small objects will fill them).
+    if (bytes > ImmixBlock::kLineSize) return AllocateInImmixOverflow(bytes);
+    while (true) {
+        uint8_t* top = immixCursor_;
+        if (bytes <= static_cast<size_t>(immixLimit_ - top)) {
+            immixCursor_ = top + bytes;
+            ImmixBlock::MarkStart(top);
+            return top;
+        }
+        uint8_t* start;
+        uint8_t* end;
+        if (immixBlock_ == nullptr || !immixBlock_->NextHole(immixNextLine_, start, end)) {
+            immixBlock_ = heap_.immixBlocks().TakeBlock();
+            immixNextLine_ = ImmixBlock::FirstLine();
+            bool found = immixBlock_->NextHole(immixNextLine_, start, end);
+            RuntimeAssert(found, "Immix block %p from the heap has no hole", immixBlock_);
+        }
+        TakeImmixHole(immixBlock_, start, end, immixCursor_, immixLimit_);
+    }
+}
+
+uint8_t* CustomAllocator::AllocateInImmixOverflow(size_t bytes) noexcept {
+    while (true) {
+        uint8_t* top = overflowCursor_;
+        if (bytes <= static_cast<size_t>(overflowLimit_ - top)) {
+            overflowCursor_ = top + bytes;
+            ImmixBlock::MarkStart(top);
+            return top;
+        }
+        // The rest of the previous overflow block (less than a medium object) is left to the next sweep.
+        ImmixBlock* block = heap_.immixBlocks().TakeFreeBlock();
+        TakeImmixHole(block, block->Begin(), block->End(), overflowCursor_, overflowLimit_);
+    }
 }
 
 uint8_t* CustomAllocator::AllocateInSingleObjectPage(uint64_t cellCount) noexcept {

@@ -31,6 +31,7 @@ void Heap::PrepareForGC() noexcept {
     }
     fixedBlockExtraObjectPages_.PrepareForGC();
     singleExtraObjectPages_.PrepareForGC();
+    immixBlocks_.PrepareForGC();
 }
 
 void Heap::PrepareForYoungGC() noexcept {
@@ -42,12 +43,13 @@ void Heap::PrepareForYoungGC() noexcept {
     }
     fixedBlockExtraObjectPages_.PrepareForYoungGC();
     singleExtraObjectPages_.PrepareForYoungGC();
+    immixBlocks_.PrepareForYoungGC();
 }
 
 namespace {
 
 struct PageRange {
-    enum class Kind { kFixedBlock, kNextFit, kSingleObject };
+    enum class Kind { kFixedBlock, kNextFit, kSingleObject, kImmix };
 
     const uint8_t* begin;
     const uint8_t* end;
@@ -74,6 +76,7 @@ void Heap::ForEachHeapSlot(
         auto* data = page->Data();
         ranges.push_back({data, data + ObjectSweepTraits::elementSize(data).inBytes(), PageRange::Kind::kSingleObject, page});
     });
+    immixBlocks_.TraverseChunks([&](uint8_t* begin, uint8_t* end) { ranges.push_back({begin, end, PageRange::Kind::kImmix, nullptr}); });
     std::sort(ranges.begin(), ranges.end(), [](const PageRange& lhs, const PageRange& rhs) { return lhs.begin < rhs.begin; });
 
     auto range = ranges.begin();
@@ -94,11 +97,19 @@ void Heap::ForEachHeapSlot(
             case PageRange::Kind::kSingleObject:
                 block = static_cast<SingleObjectPage*>(range->page)->Data();
                 break;
+            case PageRange::Kind::kImmix:
+                // Kore: the closest object start, which must still reach `address`.
+                block = ImmixBlock::Of(address)->StartAtOrBefore(address);
+                break;
         }
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
         // Free fixed blocks are zeroed (apart from free-list links stored in the GC header word).
         if (object->typeInfoOrMetaRelaxed() == nullptr) continue;
+        if (range->kind == PageRange::Kind::kImmix &&
+            address >= block + ObjectSweepTraits::elementSize(block).inBytes()) {
+            continue;
+        }
         process(slot, object);
     }
 }
@@ -122,6 +133,7 @@ FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle, const std::function<void(const
                     fixedBlockPages_[blockSize].Sweep(sweepHandle, localQueue);
                 }
                 nextFitPages_.Sweep(sweepHandle, localQueue);
+                immixBlocks_.Sweep<ObjectSweepTraits>(sweepHandle, localQueue, allocatedSizeTracker_);
             }
             std::unique_lock guard(finalizerQueueMutex);
             finalizerQueue.mergeFrom(std::move(localQueue));
@@ -199,6 +211,11 @@ std::vector<ObjHeader*> Heap::GetAllocatedObjects() noexcept {
             allocated.push_back(reinterpret_cast<CustomHeapObject*>(block)->object());
         }
     }
+    immixBlocks_.TraverseBlocks([&](ImmixBlock* block) {
+        for (auto* object : block->GetAllocatedBlocks()) {
+            allocated.push_back(reinterpret_cast<CustomHeapObject*>(object)->object());
+        }
+    });
     std::vector<ObjHeader*> unfinalized;
     for (auto* block: allocated) {
         if (!block->has_meta_object() || !mm::ExtraObjectData::Get(block)->getFlag(mm::ExtraObjectData::FLAGS_FINALIZED)) {
@@ -216,6 +233,7 @@ void Heap::ClearForTests() noexcept {
     singleObjectPages_.Clear();
     fixedBlockExtraObjectPages_.Clear();
     singleExtraObjectPages_.Clear();
+    immixBlocks_.Clear();
 }
 
 } // namespace kotlin::alloc
