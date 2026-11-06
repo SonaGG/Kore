@@ -249,7 +249,7 @@ class NativeSecondStageCompilationConfig(
 
     // Kore: Immix blocks for small and medium objects (memory v2). The nursery is not used with them.
     val immix: Boolean
-        get() = configuration.get(BinaryOptions.immix) ?: false
+        get() = configuration.get(BinaryOptions.immix) ?: (gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM)
 
     // Kore: no shadow stack frames in generated code; the GC scans the stacks conservatively. On by default where the
     // runtime can find the stack bounds and save the registers (64-bit x86 and ARM, except arm64_32).
