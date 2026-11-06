@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan
 import llvm.LLVMContextCreate
 import llvm.LLVMContextDispose
 import llvm.LLVMDisposeModule
+import llvm.LLVMKotlinSplitAndRunPasses
 import llvm.LLVMKotlinSplitModule
 import org.jetbrains.kotlin.backend.konan.driver.NativeBackendPhaseContext
 import org.jetbrains.kotlin.backend.konan.llvm.parseBitcodeFile
@@ -99,14 +100,25 @@ internal class BitcodeCompiler(
      */
     fun makeObjectFiles(bitcodeFile: File, objectFile: File): List<File> {
         val configurables = platform.configurables
-        val partitions = if (configurables is ClangFlags) codegenPartitions(configurables, bitcodeFile) else 1
+        val ltoPartitions = config.parallelLtoPartitions
+        val partitions = when {
+            ltoPartitions > 1 -> ltoPartitions
+            configurables is ClangFlags -> codegenPartitions(configurables, bitcodeFile)
+            else -> 1
+        }
         if (partitions <= 1) {
             makeObjectFile(bitcodeFile, objectFile)
             return listOf(objectFile)
         }
         configurables as ClangFlags
         val prefix = objectFile.absoluteFile.normalize().path + ".part"
-        val written = splitBitcode(bitcodeFile, partitions, prefix)
+        val written = if (ltoPartitions > 1) {
+            splitAndOptimize(bitcodeFile, partitions, prefix).also {
+                check(it > 0) { "Failed to optimize the partitions of $bitcodeFile" }
+            }
+        } else {
+            splitBitcode(bitcodeFile, partitions, prefix)
+        }
         if (written <= 0) {
             makeObjectFile(bitcodeFile, objectFile)
             return listOf(objectFile)
@@ -141,6 +153,28 @@ internal class BitcodeCompiler(
         if (requested > 1) return requested
         if (bitcodeFile.length() < MIN_SPLIT_BITCODE_BYTES) return 1
         return Runtime.getRuntime().availableProcessors().coerceIn(1, MAX_AUTO_PARTITIONS)
+    }
+
+    // Kore: see [parallelLtoPartitions]. The module has been through the LTO pre-link pipeline and internalized.
+    private fun splitAndOptimize(bitcodeFile: File, partitions: Int, prefix: String): Int {
+        val pipelineConfig = createLTOFinalPipelineConfig(context, platform.targetTriple.toString(), closedWorld = config.isFinalBinary)
+        val passes = LTOPreSplitPipeline(pipelineConfig, null).use { it.partitionPasses }
+        LlvmOptimizationPipeline.initLLVMOnce()
+        val llvmContext = LLVMContextCreate()!!
+        try {
+            val module = parseBitcodeFile(context, context.diagnosticReporter, llvmContext, bitcodeFile.absoluteFile.normalize().path)
+            try {
+                return LLVMKotlinSplitAndRunPasses(
+                        module, partitions, passes, pipelineConfig.targetTriple, pipelineConfig.cpuModel, pipelineConfig.cpuFeatures,
+                        pipelineConfig.codegenOptimizationLevel, pipelineConfig.relocMode, pipelineConfig.codeModel,
+                        pipelineConfig.inlineThreshold ?: -1, prefix,
+                )
+            } finally {
+                LLVMDisposeModule(module)
+            }
+        } finally {
+            LLVMContextDispose(llvmContext)
+        }
     }
 
     private fun splitBitcode(bitcodeFile: File, partitions: Int, prefix: String): Int {

@@ -52,6 +52,17 @@ LLVMErrorRef LLVMKotlinRunPasses(LLVMModuleRef M, const char *Passes,
 int LLVMKotlinSplitModule(LLVMModuleRef M, unsigned Partitions,
                           const char *PathPrefix);
 
+/// Kore: like `LLVMKotlinSplitModule`, but each partition is then optimized with
+/// the pipeline `Passes` (e.g. `lto<O3>`), in parallel: in its own context, with
+/// its own target machine. Writes partition `i` to `<PathPrefix><i>.bc`. `M` is
+/// modified. Returns the number of files written, or -1 on an error.
+int LLVMKotlinSplitAndRunPasses(LLVMModuleRef M, unsigned Partitions,
+                                const char *Passes, const char *Triple,
+                                const char *CPU, const char *Features,
+                                LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
+                                LLVMCodeModel CodeModel, int InlinerThreshold,
+                                const char *PathPrefix);
+
 /// Kore: prepares the linked runtime module `Runtime` to be compiled once into a
 /// native object that is shared by many programs, and returns a new module in
 /// the same context to link into a program instead of the runtime.

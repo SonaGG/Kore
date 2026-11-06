@@ -99,6 +99,11 @@ internal val LTOBitcodeOptimizationPhase = optimizationPipelinePass(
         pipeline = ::LTOOptimizationPipeline
 )
 
+internal val LTOPreSplitOptimizationPhase = optimizationPipelinePass(
+        name = "LTOPreSplitOptimization",
+        pipeline = ::LTOPreSplitPipeline
+)
+
 internal val ThreadSanitizerPhase = optimizationPipelinePass(
         name = "ThreadSanitizerPhase",
         pipeline = ::ThreadSanitizerPipeline
@@ -176,7 +181,12 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
         }
         it.runAndMeasurePhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
         it.runAndMeasurePhase(ModuleBitcodeOptimizationPhase, module)
-        it.runAndMeasurePhase(LTOBitcodeOptimizationPhase, module)
+        // Kore: with parallel partitions, the LTO pipeline runs on each partition (see `BitcodeCompiler`).
+        if (context.config.parallelLtoPartitions > 1) {
+            it.runAndMeasurePhase(LTOPreSplitOptimizationPhase, module)
+        } else {
+            it.runAndMeasurePhase(LTOBitcodeOptimizationPhase, module)
+        }
         when (context.config.sanitizer) {
             SanitizerKind.THREAD -> it.runAndMeasurePhase(ThreadSanitizerPhase, module)
             SanitizerKind.ADDRESS -> context.reportCompilationError("Address sanitizer is not supported yet")

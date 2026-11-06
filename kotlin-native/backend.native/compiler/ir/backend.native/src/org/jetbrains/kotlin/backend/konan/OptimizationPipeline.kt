@@ -421,6 +421,20 @@ class LTOOptimizationPipeline(config: LlvmPipelineConfig, performanceManager: Pe
             }
 }
 
+// Kore: the whole-module part of the LTO pipeline when the rest runs on partitions in parallel (see
+// [parallelLtoPartitions]): internalizing and dropping dead code need the whole program.
+class LTOPreSplitPipeline(private val config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
+        LlvmOptimizationPipeline(config, performanceManager, logger) {
+    override val pipelineName = "llvm-lto-pre-split"
+    override val passes = buildList {
+        if (config.internalize && config.pgoInstrumentFile == null) add("internalize")
+        if (config.globalDce) add("globaldce")
+    }
+
+    // The pipeline each partition runs.
+    val partitionPasses: String get() = config.ltoPasses ?: "lto<$optimizationFlag>"
+}
+
 class ThreadSanitizerPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :
         LlvmOptimizationPipeline(config, performanceManager, logger) {
     override val pipelineName = "llvm-tsan"

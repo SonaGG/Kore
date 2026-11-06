@@ -7,6 +7,7 @@
 #include "KotlinPlugin.h"
 #include "PassesProfileHandler.h"
 
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Module.h"
@@ -18,6 +19,11 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
+#include "llvm-c/TargetMachine.h"
+
+#include <atomic>
+#include <thread>
+#include <vector>
 
 using namespace llvm;
 using namespace llvm::kotlin;
@@ -313,4 +319,73 @@ void LLVMKotlinAppendToUsed(LLVMModuleRef M, LLVMValueRef *Values,
   for (unsigned I = 0; I < Count; ++I)
     GlobalValues.push_back(unwrap<GlobalValue>(Values[I]));
   appendToUsed(*unwrap(M), GlobalValues);
+}
+
+int LLVMKotlinSplitAndRunPasses(LLVMModuleRef M, unsigned Partitions,
+                                const char *Passes, const char *Triple,
+                                const char *CPU, const char *Features,
+                                LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
+                                LLVMCodeModel CodeModel, int InlinerThreshold,
+                                const char *PathPrefix) {
+  Module *Mod = unwrap(M);
+  // As in `LLVMKotlinSplitModule`: externalized locals must stay unique.
+  for (GlobalValue &GV : Mod->global_values()) {
+    if (GV.hasLocalLinkage() && GV.hasName())
+      GV.setName(GV.getName() + ".kore");
+  }
+  // Each partition is optimized in its own context (contexts are not thread
+  // safe), so it is passed on as bitcode.
+  std::vector<SmallString<0>> Parts;
+  SplitModule(*Mod, Partitions, [&](std::unique_ptr<Module> Part) {
+    SmallString<0> Buffer;
+    raw_svector_ostream OS(Buffer);
+    WriteBitcodeToFile(*Part, OS);
+    Parts.push_back(std::move(Buffer));
+  });
+
+  std::atomic<bool> Failed = false;
+  std::vector<std::thread> Threads;
+  for (size_t I = 0; I < Parts.size(); ++I) {
+    Threads.emplace_back([&, I] {
+      LLVMContext Context;
+      auto Parsed = parseBitcodeFile(
+          MemoryBufferRef(StringRef(Parts[I].data(), Parts[I].size()),
+                          "partition"),
+          Context);
+      if (!Parsed) {
+        consumeError(Parsed.takeError());
+        Failed = true;
+        return;
+      }
+      std::unique_ptr<Module> Part = std::move(*Parsed);
+      Parts[I].clear();
+      LLVMTargetRef Target;
+      if (LLVMGetTargetFromTriple(Triple, &Target, nullptr) != 0) {
+        Failed = true;
+        return;
+      }
+      LLVMTargetMachineRef TM = LLVMCreateTargetMachine(
+          Target, Triple, CPU, Features, Level, Reloc, CodeModel);
+      LLVMErrorRef Err =
+          LLVMKotlinRunPasses(wrap(Part.get()), Passes, TM, InlinerThreshold,
+                              nullptr, nullptr, nullptr, nullptr, nullptr);
+      LLVMDisposeTargetMachine(TM);
+      if (Err != nullptr) {
+        LLVMConsumeError(Err);
+        Failed = true;
+        return;
+      }
+      std::error_code EC;
+      raw_fd_ostream OS(std::string(PathPrefix) + std::to_string(I) + ".bc",
+                        EC, sys::fs::OF_None);
+      if (EC) {
+        Failed = true;
+        return;
+      }
+      WriteBitcodeToFile(*Part, OS);
+    });
+  }
+  for (auto &Thread : Threads)
+    Thread.join();
+  return Failed ? -1 : static_cast<int>(Parts.size());
 }

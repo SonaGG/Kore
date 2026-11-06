@@ -805,3 +805,25 @@ internal val NativeSecondStageCompilationConfig.codegenCpuFeatures: String?
         null -> platform.targetCpuFeatures
         else -> null
     }
+
+/**
+ * Kore: the number of partitions whose LTO pipeline and code generation run in parallel, or 1. When partitioned, the
+ * whole module only goes through the LTO pre-link pipeline (which does the cross-module inlining) and is internalized;
+ * each partition then gets the LTO pipeline and is compiled to machine code on its own thread.
+ */
+internal val NativeSecondStageCompilationConfig.parallelLtoPartitions: Int
+    get() {
+        val requested = codegenPartitions.toInt()
+        if (requested == 1 || !optimizationsEnabled) return 1
+        // Splitting would externalize the instrumentation's counters and profile data, which belong to COMDAT groups.
+        if (pgoGenerate) return 1
+        // Externalized locals would be exported from a DLL by MinGW's automatic export, and caches and libraries are
+        // linked into other binaries, so only split executables.
+        if (produce != CompilerOutputKind.PROGRAM) return 1
+        if (sanitizer != null) return 1
+        val configurables = platform.configurables
+        if (configurables !is ClangFlags) return 1
+        if (configurables is AppleConfigurables && configuration.get(BinaryOptions.compileBitcodeWithXcodeLlvm) == true) return 1
+        if (requested > 1) return requested
+        return Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+    }
