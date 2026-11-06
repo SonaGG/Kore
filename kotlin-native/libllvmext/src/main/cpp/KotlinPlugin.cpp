@@ -141,6 +141,9 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // (rarely run) ones with them, so that they can be vectorized.
                   if (!passDisabled("irce"))
                     PM.addPass(IRCEPass());
+                  // Then poll between chunks of iterations of the long
+                  // call-free loops (which changes their latch conditions).
+                  PM.addPass(LoopPollStripMiningPass());
                 });
             // Kore: static hotness for the inliner.
             PB.registerPipelineEarlySimplificationEPCallback(
@@ -171,6 +174,7 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                    ArrayRef<PassBuilder::PipelineElement>) {
                   if (parsePass(Name, "kotlin-loop-safepoints")) {
                     PM.addPass(LoopSafepointsPass());
+                    PM.addPass(LoopPollStripMiningPass());
                     return true;
                   }
                   if (parsePass(Name, "kotlin-tsan")) {
