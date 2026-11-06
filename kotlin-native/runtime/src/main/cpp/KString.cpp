@@ -124,6 +124,17 @@ OBJ_GETTER(createString, uint32_t lengthUnits, F&& initializer) {
     return result;
 }
 
+// Kore: a String of ASCII characters (e.g. formatted numbers), without the UTF-8 decoding and validation.
+extern "C" OBJ_GETTER(CreateStringFromAscii, const char* ascii, uint32_t length) {
+    if (length == 0) RETURN_RESULT_OF0(TheEmptyString);
+    if (kotlin::compiler::latin1Strings()) {
+        RETURN_RESULT_OF(createString<StringEncoding::kLatin1>, length, [=](uint8_t* out) { std::copy_n(ascii, length, out); })
+    }
+    RETURN_RESULT_OF(createString<StringEncoding::kUTF16>, length, [=](KChar* out) {
+        for (uint32_t i = 0; i < length; ++i) out[i] = static_cast<KChar>(static_cast<uint8_t>(ascii[i]));
+    })
+}
+
 OBJ_GETTER(createStringFromUTF8, const char* utf8, uint32_t lengthBytes, bool ensureValid) {
     if (utf8 == nullptr) RETURN_OBJ(nullptr);
     if (lengthBytes == 0) RETURN_RESULT_OF0(TheEmptyString);

@@ -127,6 +127,8 @@ extern "C" {
 
 OBJ_GETTER(CreateStringFromCString, const char* cstring);
 OBJ_GETTER(CreateStringFromUtf8, const char* utf8, uint32_t length);
+// Kore: a String of ASCII characters, without UTF-8 decoding.
+OBJ_GETTER(CreateStringFromAscii, const char* ascii, uint32_t length);
 OBJ_GETTER(CreateStringFromUtf8OrThrow, const char* utf8, uint32_t length);
 OBJ_GETTER(CreateStringFromUtf16, const KChar* utf16, uint32_t length);
 OBJ_GETTER(CreateUninitializedString, StringEncoding encoding, uint32_t length);

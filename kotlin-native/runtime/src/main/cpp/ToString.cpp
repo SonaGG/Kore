@@ -72,8 +72,8 @@ extern "C" {
 
 OBJ_GETTER(Kotlin_Byte_toString, KByte value) {
   char cstring[21];
-  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromCString, cstring);
+  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
+  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
 }
 
 OBJ_GETTER(Kotlin_Char_toString, KChar value) {
@@ -82,14 +82,14 @@ OBJ_GETTER(Kotlin_Char_toString, KChar value) {
 
 OBJ_GETTER(Kotlin_Short_toString, KShort value) {
   char cstring[21];
-  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromCString, cstring);
+  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
+  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
 }
 
 OBJ_GETTER(Kotlin_Int_toString, KInt value) {
   char cstring[21];
-  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromCString, cstring);
+  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
+  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
 }
 
 OBJ_GETTER(Kotlin_Int_toStringRadix, KInt value, KInt radix) {
@@ -98,8 +98,8 @@ OBJ_GETTER(Kotlin_Int_toStringRadix, KInt value, KInt radix) {
 
 OBJ_GETTER(Kotlin_Long_toString, KLong value) {
   char cstring[21];
-  kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromCString, cstring);
+  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
+  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
 }
 
 OBJ_GETTER(Kotlin_Long_toStringRadix, KLong value, KInt radix) {
