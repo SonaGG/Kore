@@ -553,6 +553,7 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     // Kore: whether reference fields of objects and `Array` elements are 32-bit, and the base they are relative to (the
     // runtime's `Kotlin_heapBase`, an address).
     val compressedRefs: Boolean = context.config.compressedRefs
+    val compressedRefsZeroBased: Boolean = context.config.compressedRefsZeroBased
     val heapBaseGlobal by lazy {
         LLVMGetNamedGlobal(module, "Kotlin_heapBase") ?: LLVMAddGlobal(module, pointerType, "Kotlin_heapBase")!!.also {
             LLVMSetLinkage(it, LLVMLinkage.LLVMExternalLinkage)

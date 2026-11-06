@@ -23,11 +23,14 @@ extern "C" uintptr_t Kotlin_heapBase;
 namespace kotlin {
 
 // The base is 32 GiB-aligned (see `HeapReservation`): `(address - base) >> 3` is `address >> 3` modulo 2^32, and 0 for null.
+// Zero-based (`compiler::compressedRefsZeroBased()`): the reference is the address itself (below 4 GiB).
 ALWAYS_INLINE inline uint32_t encodeRef(const ObjHeader* object) noexcept {
+    if (compiler::compressedRefsZeroBased()) return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object) >> 3);
 }
 
 ALWAYS_INLINE inline ObjHeader* decodeRef(uint32_t ref) noexcept {
+    if (compiler::compressedRefsZeroBased()) return reinterpret_cast<ObjHeader*>(static_cast<uintptr_t>(ref));
     return ref == 0 ? nullptr : reinterpret_cast<ObjHeader*>(Kotlin_heapBase + (static_cast<uintptr_t>(ref) << 3));
 }
 

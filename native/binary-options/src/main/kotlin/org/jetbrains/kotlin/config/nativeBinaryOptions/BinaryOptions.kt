@@ -73,6 +73,10 @@ object BinaryOptions : BinaryOptionRegistry() {
     // the custom allocator with Immix and no nursery, on 64-bit MinGW and Linux; ignored otherwise.
     val compressedRefs by booleanOption()
 
+    // Kore: compressed references that are the low 32 bits of the address (no base, no shift): the heap lies below 4 GiB, and
+    // the executable is linked at a fixed low address (no ASLR for it). MinGW executables only.
+    val compressedRefsZeroBased by booleanOption()
+
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 

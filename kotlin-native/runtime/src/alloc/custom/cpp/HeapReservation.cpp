@@ -176,6 +176,77 @@ alloc::HeapReservation* reserveCompressed(size_t maxBytes) noexcept {
     std::abort();
 }
 
+// Kore: zero-based compressed references: the heap and the image lie below 4 GiB, and a reference is the low 32 bits of
+// the address. Reserves the largest free range of address space below 4 GiB (the executable is linked low).
+alloc::HeapReservation* reserveZeroBased(size_t maxBytes) noexcept {
+    constexpr uintptr_t kLimit = uintptr_t(1) << 32;
+    // Above the first 64 MiB: small integers on the stack never point into the heap.
+    constexpr uintptr_t kLow = uintptr_t(64) << 20;
+    // Free ranges this close together are reserved together, the space between them being holes (e.g. the shared user
+    // data page at 2 GiB on Windows, which splits the low 4 GiB in two).
+    constexpr uintptr_t kMaxHole = uintptr_t(64) << 20;
+    ImageRange image = imageRange();
+    if (image.end == 0 || image.end > kLimit) {
+        konan::consoleErrorf("Kore: zero-based compressed references: the image is not below 4 GiB. Aborting.\n");
+        std::abort();
+    }
+    std::vector<std::pair<uintptr_t, uintptr_t>> regions;
+    auto consider = [&](uintptr_t start, uintptr_t end) {
+        start = std::max((start + kGranularity - 1) & ~(kGranularity - 1), kLow);
+        end = std::min(end & ~(kGranularity - 1), kLimit);
+        if (end > start + (uintptr_t(16) << 20)) regions.push_back({start, end});
+    };
+#if KONAN_WINDOWS
+    for (uintptr_t address = kGranularity; address < kLimit;) {
+        MEMORY_BASIC_INFORMATION info;
+        if (VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) == 0) break;
+        auto regionStart = reinterpret_cast<uintptr_t>(info.BaseAddress);
+        uintptr_t regionEnd = regionStart + info.RegionSize;
+        if (info.State == MEM_FREE) consider(regionStart, regionEnd);
+        address = regionEnd;
+    }
+#else
+    consider(uintptr_t(1) << 30, kLimit);
+#endif
+    // The cluster of nearby free ranges with the most space.
+    size_t bestFirst = 0, bestLast = 0, bestBytes = 0;
+    for (size_t first = 0; first < regions.size();) {
+        size_t last = first;
+        size_t bytes = regions[first].second - regions[first].first;
+        while (last + 1 < regions.size() && regions[last + 1].first - regions[last].second <= kMaxHole) {
+            ++last;
+            bytes += regions[last].second - regions[last].first;
+        }
+        if (bytes > bestBytes) {
+            bestFirst = first;
+            bestLast = last;
+            bestBytes = bytes;
+        }
+        first = last + 1;
+    }
+    if (bestBytes != 0) {
+        uintptr_t start = regions[bestFirst].first;
+        uintptr_t end = regions[bestLast].second;
+        if (end - start > maxBytes) end = start + maxBytes;
+        std::vector<std::pair<uintptr_t, uintptr_t>> holes;
+        bool reserved = true;
+        for (size_t i = bestFirst; i <= bestLast && regions[i].first < end; ++i) {
+            uintptr_t regionEnd = std::min(regions[i].second, end);
+            if (reserveAt(regions[i].first, regionEnd - regions[i].first) == nullptr) {
+                reserved = false;
+                break;
+            }
+            if (i + 1 <= bestLast && regions[i + 1].first < end) holes.push_back({regionEnd, regions[i + 1].first});
+        }
+        if (reserved) {
+            Kotlin_heapBase = 0;
+            return new alloc::HeapReservation(reinterpret_cast<uint8_t*>(start), end - start, holes);
+        }
+    }
+    konan::consoleErrorf("Kore: zero-based compressed references: no address space for the Kotlin heap below 4 GiB. Aborting.\n");
+    std::abort();
+}
+
 [[noreturn]] void outOfMemory(size_t bytes) noexcept {
     konan::consoleErrorf("Out of memory trying to commit %zu bytes of the Kotlin heap. Aborting.\n", bytes);
     std::abort();
@@ -189,6 +260,7 @@ alloc::HeapReservation* alloc::HeapReservation::instance() noexcept {
         size_t bytes = environmentSize("KORE_HEAP_RESERVE_GB", 32, size_t(1) << 30);
         // Page numbers are 32-bit.
         bytes = std::min(bytes, (size_t(1) << 32) * kPageSize - kPageSize);
+        if (compiler::compressedRefsZeroBased()) return reserveZeroBased(bytes == 0 ? kCompressedWindow : bytes);
         if (compiler::compressedRefs()) return reserveCompressed(bytes == 0 ? kCompressedWindow : bytes);
         if (bytes == 0) return nullptr;
         // Smaller reservations if the address space is limited.
@@ -204,6 +276,21 @@ alloc::HeapReservation* alloc::HeapReservation::instance() noexcept {
 
 alloc::HeapReservation::HeapReservation(uint8_t* base, size_t bytes) noexcept :
     base_(base), end_(base + bytes), pageCount_(static_cast<Page>(bytes / kPageSize)) {}
+
+alloc::HeapReservation::HeapReservation(uint8_t* base, size_t bytes, const std::vector<std::pair<uintptr_t, uintptr_t>>& holes) noexcept :
+    HeapReservation(base, bytes) {
+    // Everything is handed out from free runs: the pages around the holes.
+    frontier_ = pageCount_;
+    committed_.resize((static_cast<size_t>(pageCount_) + 63) / 64);
+    Page start = 0;
+    for (auto& hole : holes) {
+        Page holeStart = pageOf(reinterpret_cast<void*>(hole.first));
+        Page holeEnd = static_cast<Page>((hole.second - reinterpret_cast<uintptr_t>(base) + kPageSize - 1) / kPageSize);
+        if (holeStart > start) insertFreeRun(start, holeStart - start);
+        start = holeEnd;
+    }
+    if (pageCount_ > start) insertFreeRun(start, pageCount_ - start);
+}
 
 void* alloc::HeapReservation::allocate(size_t bytes, size_t alignment, size_t unzeroedFrom, size_t unzeroedLength) noexcept {
     Page pages = static_cast<Page>((bytes + kPageSize - 1) / kPageSize);

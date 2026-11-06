@@ -264,6 +264,11 @@ class NativeSecondStageCompilationConfig(
     val compressedRefs: Boolean
         get() = (configuration.get(BinaryOptions.compressedRefs) ?: false) && compressedRefsSupported
 
+    // Kore: compressed references that are plain 32-bit addresses (decoding is a zero extension), see `BinaryOptions`.
+    val compressedRefsZeroBased: Boolean
+        get() = compressedRefs && (configuration.get(BinaryOptions.compressedRefsZeroBased) ?: false) &&
+                target.family == Family.MINGW && produce == CompilerOutputKind.PROGRAM
+
     private val compressedRefsSupported: Boolean
         get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u &&
                 target.architecture == Architecture.X64 &&

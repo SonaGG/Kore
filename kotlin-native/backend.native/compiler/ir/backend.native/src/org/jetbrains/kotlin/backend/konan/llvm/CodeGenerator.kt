@@ -778,6 +778,8 @@ internal abstract class FunctionGenerationContext(
     // Kore: compressed references (docs/kore/gc-redesign.md, phase 3). A 32-bit reference to a pointer: null for 0, else
     // `Kotlin_heapBase + ref * 8`.
     fun decodeRef(ref: LLVMValueRef): LLVMValueRef {
+        // Zero-based: the reference is the address (null is 0).
+        if (llvm.compressedRefsZeroBased) return intToPtr(zext(ref, llvm.int64Type), llvm.pointerType)
         val base = loadInvariant(llvm.pointerType, llvm.heapBaseGlobal)
         val offset = shl(zext(ref, llvm.int64Type), 3)
         val address = gep(llvm.int8Type, base, offset)

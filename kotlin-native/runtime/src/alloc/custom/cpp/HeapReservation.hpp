@@ -49,6 +49,8 @@ public:
     size_t retainedFreeBytes() const noexcept;
 
     HeapReservation(uint8_t* base, size_t bytes) noexcept;
+    // Kore: a reservation with holes: ranges of its address space (owned by others) that are never handed out.
+    HeapReservation(uint8_t* base, size_t bytes, const std::vector<std::pair<uintptr_t, uintptr_t>>& holes) noexcept;
 
 private:
 

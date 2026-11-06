@@ -129,7 +129,9 @@ void collectConservativeStackCandidates(
             for (uint32_t half : {static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32)}) {
                 if (half != 0) candidates.push_back(reinterpret_cast<ObjHeader**>(decodeRef(half)));
             }
-            if (word < kCompressedRefsWindow) candidates.push_back(reinterpret_cast<ObjHeader**>(Kotlin_heapBase + word));
+            if (!compiler::compressedRefsZeroBased() && word < kCompressedRefsWindow) {
+                candidates.push_back(reinterpret_cast<ObjHeader**>(Kotlin_heapBase + word));
+            }
         }
     };
     uintptr_t high = suspension.stackBase();

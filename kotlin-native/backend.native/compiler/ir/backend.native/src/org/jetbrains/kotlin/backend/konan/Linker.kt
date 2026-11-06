@@ -146,8 +146,12 @@ internal class Linker(
         }
         File(executable).delete()
 
+        // Kore: zero-based compressed references: the image must lie below 4 GiB, at a fixed address.
+        val zeroBasedLinkerArgs = if (config.compressedRefsZeroBased)
+            listOf("-Wl,--image-base=0x1000000", "-Wl,--disable-dynamicbase", "-Wl,--disable-high-entropy-va")
+        else emptyList()
         val linkerArgs = asLinkerArgs(config.configuration.getNotNull(NativeConfigurationKeys.LINKER_ARGS)) +
-                libraryProvidedLinkerFlags + additionalLinkerArgs + extraLinkerArgs
+                libraryProvidedLinkerFlags + additionalLinkerArgs + extraLinkerArgs + zeroBasedLinkerArgs
 
         return with(linker) {
             LinkerArguments(
