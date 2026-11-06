@@ -43,17 +43,19 @@ public:
     void RetireNursery() noexcept;
 
     // Kore: memory in the regular heap for an object moved out of the nursery.
-    uint8_t* AllocateForEvacuation(AllocationSize size) noexcept { return Allocate(size); }
+    uint8_t* AllocateForEvacuation(AllocationSize size) noexcept { return Allocate(size, /* poll = */ false); }
 
     Heap& heap() noexcept {
         return heap_;
     }
 
 private:
-    uint8_t* Allocate(AllocationSize size) noexcept;
-    uint8_t* AllocateInSingleObjectPage(uint64_t cellCount) noexcept;
-    uint8_t* AllocateInNextFitPage(uint32_t cellCount) noexcept;
-    uint8_t* AllocateInFixedBlockPage(uint32_t cellCount) noexcept;
+    // Kore: with `poll`, a mutator polls before taking a new page or allocating a large object (not the GC thread,
+    // which evacuates with it).
+    uint8_t* Allocate(AllocationSize size, bool poll = true) noexcept;
+    uint8_t* AllocateInSingleObjectPage(uint64_t cellCount, bool poll) noexcept;
+    uint8_t* AllocateInNextFitPage(uint32_t cellCount, bool poll) noexcept;
+    uint8_t* AllocateInFixedBlockPage(uint32_t cellCount, bool poll) noexcept;
     uint8_t* AllocateExtraObjectData() noexcept;
 
     // Kore: bump allocation in the thread's nursery block, or null.
@@ -70,7 +72,7 @@ private:
     NO_INLINE uint8_t* RefillNursery(size_t bytes) noexcept;
 
     // Kore: memory v2. Bump allocation in the current hole of the thread's Immix block.
-    ALWAYS_INLINE uint8_t* AllocateInImmix(AllocationSize size) noexcept {
+    ALWAYS_INLINE uint8_t* AllocateInImmix(AllocationSize size, bool poll) noexcept {
         size_t bytes = size.inBytes();
         uint8_t* top = immixCursor_;
         if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
@@ -78,11 +80,11 @@ private:
             ImmixBlock::MarkStart(top);
             return top;
         }
-        return AllocateInImmixSlowPath(size);
+        return AllocateInImmixSlowPath(size, poll);
     }
-    NO_INLINE uint8_t* AllocateInImmixSlowPath(AllocationSize size) noexcept;
-    uint8_t* AllocateInImmixOverflow(size_t bytes) noexcept;
-    uint8_t* AllocateLargerThanImmix(uint64_t cellCount) noexcept;
+    NO_INLINE uint8_t* AllocateInImmixSlowPath(AllocationSize size, bool poll) noexcept;
+    uint8_t* AllocateInImmixOverflow(size_t bytes, bool poll) noexcept;
+    uint8_t* AllocateLargerThanImmix(uint64_t cellCount, bool poll) noexcept;
     // Makes [start, end) the hole bumped through by `cursor` up to `limit`.
     void TakeImmixHole(ImmixBlock* block, uint8_t* start, uint8_t* end, uint8_t*& cursor, uint8_t*& limit) noexcept;
     void ResetImmix() noexcept;

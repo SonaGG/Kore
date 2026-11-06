@@ -1195,8 +1195,8 @@ internal class CodeGeneratorVisitor(
     }
     //-------------------------------------------------------------------------//
 
-    // Kore: the kotlin-loop-safepoints LLVM pass removes the poll from bounded innermost loops and inlines the others, so
-    // keep it a call until then.
+    // Kore: the kotlin-loop-safepoints LLVM pass removes the poll from short innermost loops, strip-mines long call-free
+    // ones and inlines the others, so keep it a call until then.
     private fun loopSafePoint() {
         val poll = call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
         LLVMAddCallSiteAttribute(poll, LLVMAttributeFunctionIndex,

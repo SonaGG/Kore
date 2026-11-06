@@ -36,6 +36,7 @@
 #include "GCStatistics.hpp"
 #include "KAssert.h"
 #include "Memory.h"
+#include "ThreadRegistry.hpp"
 
 namespace {
 std::atomic<size_t> allocatedBytesCounter;
@@ -187,6 +188,14 @@ BlockCache& blockCache() noexcept {
 } // namespace
 
 void* kotlin::alloc::SafeAlloc(uint64_t size) noexcept {
+    // Kore: a mutator getting pages from the system (or clearing reused ones, or waiting for the cache lock) may take
+    // a while: it does so in the native state, so that a collection does not wait for it. Nothing here touches the
+    // heap, and the callers hold no locks the collector takes.
+    ThreadStateGuard native;
+    if (mm::ThreadRegistry::IsCurrentThreadRegistered()) {
+        MemoryState* thread = mm::GetMemoryState();
+        if (GetThreadState(thread) == ThreadState::kRunnable) native = ThreadStateGuard(thread, ThreadState::kNative);
+    }
     void* memory = nullptr;
     if (size >= kCachedBlockMinBytes && size <= std::numeric_limits<size_t>::max()) {
         size_t block = blockSize(static_cast<size_t>(size));

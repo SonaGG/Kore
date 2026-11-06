@@ -103,6 +103,9 @@ public:
             RuntimeAssert(retainsNoWork(), "A queue must be empty");
         }
 
+        // Kore: see `ParallelProcessor::notifyExternalWork`.
+        void notifyExternalWork() noexcept { dispatcher_.notifyExternalWork(); }
+
         PERFORMANCE_INLINE bool retainsNoWork() const noexcept {
             return batch_.empty() && overflowList().empty();
         }
@@ -180,6 +183,8 @@ public:
                             this->batch_.fillFrom(this->overflowList());
                             RuntimeLogDebug({ kTagBalancing }, "Acquired %zu elements from the overflow list", this->batch_.elementsCount());
                         } else {
+                            // Kore: the caller takes the external work, then calls again.
+                            if (this->dispatcher_.externalWorkPending()) return nullptr;
                             bool newWorkAvailable = waitForMoreWork();
                             if (newWorkAvailable) continue;
                             return nullptr;
@@ -229,6 +234,11 @@ public:
                 return true; // tryPop will retry acquireBatch
             }
 
+            // Kore: external work is pending: no termination; `tryPop` returns for the caller to take it.
+            if (this->dispatcher_.externalWorkPending()) {
+                this->dispatcher_.waitingWorkers_.fetch_sub(1, std::memory_order_relaxed);
+                return true;
+            }
             if (this->dispatcher_.allDone_) {
                 this->dispatcher_.waitingWorkers_.fetch_sub(1, std::memory_order_relaxed);
                 return false;
@@ -262,6 +272,21 @@ public:
         // means a batch of live objects was stranded and would be swept while still reachable.
         RuntimeAssert(sharedBatches_.empty(), "Shared mark queue stranded at end of mark epoch");
         RuntimeAssert(waitingWorkers_.load() == 0, "All the workers must terminate before dispatcher destruction");
+    }
+
+    // Kore: work outside of the batches (slices of big arrays to mark), counted by `counter`. While there is some,
+    // `Worker::tryPop` returns null instead of waiting (the caller takes the work, then calls again), and the
+    // processing does not terminate. Whoever adds such work calls `notifyExternalWork` to wake waiting workers.
+    void setExternalWork(const std::atomic<size_t>* counter) noexcept { externalWork_ = counter; }
+
+    bool externalWorkPending() const noexcept {
+        return externalWork_ != nullptr && externalWork_->load(std::memory_order_relaxed) != 0;
+    }
+
+    void notifyExternalWork() noexcept {
+        // Under the lock: a worker checks for external work under it before waiting.
+        std::unique_lock lock(waitMutex_);
+        waitCV_.notify_all();
     }
 
     size_t registeredWorkers() const noexcept {
@@ -313,6 +338,7 @@ private:
     std::atomic<size_t> registeredWorkers_ = 0;
     std::atomic<size_t> waitingWorkers_ = 0;
 
+    const std::atomic<size_t>* externalWork_ = nullptr;
     std::atomic<bool> allDone_ = false;
     mutable std::mutex waitMutex_;
     mutable std::condition_variable waitCV_;

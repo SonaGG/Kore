@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -77,6 +78,9 @@ public:
 private:
     std::function<Epoch(ScheduleReason)> scheduleGC_;
     std::optional<int64_t> scheduledEpoch_;
+    // Kore: `scheduledEpoch_` for lock-free reads (-1: none), so that the threads that keep allocating while a collection
+    // is scheduled do not contend on the lock (and wait for its holder to be scheduled), which delays their safepoints.
+    std::atomic<int64_t> scheduledEpochRelaxed_ = -1;
     std::mutex scheduledEpochMutex_;
 };
 

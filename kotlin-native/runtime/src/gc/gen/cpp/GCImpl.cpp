@@ -6,6 +6,7 @@
 #include "GCImpl.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <cinttypes>
 #include <cstring>
 #include <memory>
@@ -33,6 +34,7 @@
 using namespace kotlin;
 
 std::atomic<bool> gc::internal::youngCollection = false;
+std::atomic<size_t> gc::internal::markArraySlicesPending = 0;
 
 namespace {
 
@@ -46,7 +48,7 @@ ALWAYS_INLINE gc::internal::RememberedSet& currentRememberedSet() noexcept {
 }
 
 NO_INLINE void rememberSlot(ObjHeader** slot) noexcept {
-    currentRememberedSet().slots.push_back(slot);
+    currentRememberedSet().rememberSlot(slot);
 }
 
 NO_INLINE void rememberObject(ObjHeader* holder) noexcept {
@@ -189,6 +191,32 @@ ALWAYS_INLINE void recordIfMovable(ObjHeader** slot) noexcept {
 
 ALWAYS_INLINE bool recordingNurserySlots() noexcept {
     return gRecordNurserySlots.load(std::memory_order_relaxed);
+}
+
+// Kore: during a young collection's (parallel) mark, big arrays are marked in slices, which the other mark workers take
+// (see `MarkTraits::tryDequeue`): one worker scanning a big array alone (e.g. the elements of a big ArrayList) would
+// make the pause as long as that scan.
+constexpr uint32_t kMarkArraySliceElements = 4096;
+
+struct MarkArraySlice {
+    ArrayHeader* array;
+    uint32_t begin;
+    uint32_t end;
+};
+
+std::atomic<bool> gSliceArraysInMark = false;
+[[clang::no_destroy]] std::mutex gMarkArraySlicesMutex;
+[[clang::no_destroy]] std::vector<MarkArraySlice> gMarkArraySlices;
+
+void markArraySlice(void* state, ArrayHeader* array, uint32_t begin, uint32_t end) noexcept {
+    auto& markQueue = *static_cast<MarkTraits::MarkQueue*>(state);
+    ObjHeader** slots = ArrayAddressOfElementAt(array, 0);
+    bool recordSlots = recordingNurserySlots();
+    for (uint32_t i = begin; i < end; ++i) {
+        if (recordSlots) recordIfMovable(slots + i);
+        ObjHeader* element = mm::RefFieldAccessor(slots + i).direct();
+        if (element != nullptr && element->heap()) MarkTraits::tryEnqueue(markQueue, element);
+    }
 }
 
 // During a full mark: heap objects outside of the nursery that refer to nursery objects. Nursery objects stay young
@@ -579,7 +607,8 @@ void gc::internal::GenerationalGC::keepLiveRememberedSetEntries() noexcept {
 }
 
 void gc::internal::GenerationalGC::markRememberedSet(
-        mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet) noexcept {
+        mark::ConcurrentMark::ParallelProcessor::Worker& markQueue, RememberedSet& rememberedSet,
+        std::vector<ObjHeader**>& stackCandidates) noexcept {
     // Objects logged by the holder-aware barrier: rescan all their references.
     for (ObjHeader* holder : rememberedSet.objects) {
         alloc::objectDataForObject(holder).forget();
@@ -594,7 +623,23 @@ void gc::internal::GenerationalGC::markRememberedSet(
     }
     // Slots recorded by the generic barrier: only those inside old objects are roots. Slots in young objects are
     // traced if their object is reachable; stack, global and thread-local slots are part of the root set already.
-    allocator_.forEachHeapSlot(rememberedSet.slots, [&markQueue](ObjHeader** slot, ObjHeader* owner) noexcept {
+    // Kore: looked up together with the conservative stack candidates (whose objects are roots), as each lookup walks
+    // the heap's pages.
+    auto sortUnique = [](std::vector<ObjHeader**>& addresses) {
+        std::sort(addresses.begin(), addresses.end());
+        addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
+    };
+    sortUnique(rememberedSet.slots);
+    sortUnique(stackCandidates);
+    std::vector<ObjHeader**> addresses;
+    addresses.reserve(rememberedSet.slots.size() + stackCandidates.size());
+    std::merge(rememberedSet.slots.begin(), rememberedSet.slots.end(), stackCandidates.begin(), stackCandidates.end(),
+               std::back_inserter(addresses));
+    allocator_.forEachHeapSlot(addresses, [&](ObjHeader** slot, ObjHeader* owner) noexcept {
+        if (std::binary_search(stackCandidates.begin(), stackCandidates.end(), slot)) {
+            gc::internal::collectRoot<MarkTraits>(markQueue, owner);
+        }
+        if (!std::binary_search(rememberedSet.slots.begin(), rememberedSet.slots.end(), slot)) return;
         if (!alloc::objectDataForObject(owner).old()) return;
         ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
         if (value != nullptr && value->heap()) {
@@ -619,6 +664,8 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
     stopTheWorld(gcHandle, "GC stop the world: young collection");
     gcScheduler_.onGCStart();
     state_.start(gcHandle.getEpoch());
+    // Kore: the phases of the pause, for tuning it (logged with `-Xruntime-logs=gc=info`).
+    uint64_t pauseStart = konan::getTimeMicros();
 
     // Kore: the moving young generation.
     bool nursery = alloc::nursery::enabled();
@@ -641,16 +688,24 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
         static const bool verifyMark = std::getenv("KORE_GC_VERIFY") != nullptr;
         if (verifyMark) verifyBeforeYoungMark(allocator_, rememberedSet, gcHandle.getEpoch());
     }
-    mark_.markYoungInSTW(gcHandle, [&](mark::ConcurrentMark::ParallelProcessor::Worker& worker) {
-        markRememberedSet(worker, rememberedSet);
-        // Conservatively found references only pin: liveness comes from the precise roots, as in full collections (a
-        // live reference is always in a frame slot; other stack words may be stale).
-    });
+    uint64_t markStart = konan::getTimeMicros();
+    gSliceArraysInMark.store(true, std::memory_order_relaxed);
+    auto markRememberedSets = [&](mark::ConcurrentMark::ParallelProcessor::Worker& worker,
+                                  std::vector<ObjHeader**>& stackCandidates) {
+        markRememberedSet(worker, rememberedSet, stackCandidates);
+    };
+    mark_.markYoungInSTW(gcHandle, markRememberedSets);
+    gSliceArraysInMark.store(false, std::memory_order_relaxed);
+    RuntimeAssert(gMarkArraySlices.empty(), "Array slices left after the mark");
+    uint64_t markEnd = konan::getTimeMicros();
 
     if (nursery) {
         gRecordNurserySlots.store(false, std::memory_order_relaxed);
         evacuateNursery();
     }
+    uint64_t evacuationEnd = konan::getTimeMicros();
+    GCLogInfo(gcHandle.getEpoch(), "Young pause phases: roots and remembered sets %" PRIu64 " us, mark %" PRIu64
+              " us, evacuation %" PRIu64 " us.", markStart - pauseStart, markEnd - markStart, evacuationEnd - markEnd);
 }
 
 void gc::internal::GenerationalGC::performFullCollection(GCHandle gcHandle) noexcept {
@@ -809,10 +864,42 @@ PERFORMANCE_INLINE void gc::GC::processArrayInMark(void* state, ArrayHeader* arr
             traverseArrayOfObjectsElements(array, [&check](auto accessor) noexcept { check(accessor.direct()); });
         });
     }
+    uint32_t count = array->count_;
+    bool slice = count > 2 * kMarkArraySliceElements && gSliceArraysInMark.load(std::memory_order_relaxed);
+    if (__builtin_expect(slice, false)) {
+        // Kore: share all but the first slice, which this worker marks right away.
+        {
+            std::unique_lock guard(gMarkArraySlicesMutex);
+            for (uint32_t begin = kMarkArraySliceElements; begin < count; begin += kMarkArraySliceElements) {
+                gMarkArraySlices.push_back({array, begin, std::min(begin + kMarkArraySliceElements, count)});
+            }
+            gc::internal::markArraySlicesPending.store(gMarkArraySlices.size(), std::memory_order_relaxed);
+        }
+        static_cast<MarkTraits::MarkQueue*>(state)->notifyExternalWork();
+        markArraySlice(state, array, 0, kMarkArraySliceElements);
+        return;
+    }
     if (__builtin_expect(recordingNurserySlots(), false)) {
         traverseArrayOfObjectsElements(array, [](auto accessor) noexcept { recordIfMovable(accessor.direct().location()); });
     }
     gc::internal::processArrayInMark<MarkTraits>(state, array);
+}
+
+// static
+void gc::mark::ConcurrentMark::MarkTraits::markArraySlices(MarkQueue& queue) noexcept {
+    // Until there are none left: a worker that marks a slice without finding young objects must not wait for work while
+    // there are slices.
+    while (true) {
+        MarkArraySlice slice;
+        {
+            std::unique_lock guard(gMarkArraySlicesMutex);
+            if (gMarkArraySlices.empty()) return;
+            slice = gMarkArraySlices.back();
+            gMarkArraySlices.pop_back();
+            gc::internal::markArraySlicesPending.store(gMarkArraySlices.size(), std::memory_order_relaxed);
+        }
+        markArraySlice(&queue, slice.array, slice.begin, slice.end);
+    }
 }
 
 int64_t gc::GC::Schedule() noexcept {

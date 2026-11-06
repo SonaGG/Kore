@@ -113,11 +113,13 @@ void Mark(GCHandle::GCMarkScope& markHandle, typename Traits::MarkQueue& markQue
 }
 
 // Kore: without shadow stack frames, the stack roots of a thread (suspended or native) are the heap objects that any
-// word of its stack, or of the registers it saved when it stopped, points into.
+// word of its stack, or of the registers it saved when it stopped, points into. Collects the candidate words of
+// `thread` into `candidates`; nursery objects are roots right away.
 template <typename Traits>
-void collectConservativeStackRoots(typename Traits::MarkQueue& markQueue, mm::ThreadData& thread) noexcept {
+void collectConservativeStackCandidates(
+        typename Traits::MarkQueue& markQueue, mm::ThreadData& thread, std::vector<ObjHeader**>& candidates) noexcept {
     auto& suspension = thread.suspensionData();
-    std::vector<ObjHeader**> candidates;
+    size_t first = candidates.size();
     auto consider = [&](uintptr_t word) {
         if (word >= 4096) candidates.push_back(reinterpret_cast<ObjHeader**>(word));
     };
@@ -127,8 +129,8 @@ void collectConservativeStackRoots(typename Traits::MarkQueue& markQueue, mm::Th
         consider(*reinterpret_cast<const uintptr_t*>(address));
     }
     for (size_t i = 0; i < mm::ThreadSuspensionData::kSavedRegisters; ++i) consider(suspension.savedRegisters()[i]);
-    for (ObjHeader** candidate : candidates) {
-        auto address = reinterpret_cast<uintptr_t>(candidate);
+    for (size_t i = first; i < candidates.size(); ++i) {
+        auto address = reinterpret_cast<uintptr_t>(candidates[i]);
         ObjHeader* object = alloc::nursery::movableObjectContaining(address);
         if (object == nullptr) object = alloc::nursery::retainedObjectContaining(address);
         if (object != nullptr) {
@@ -136,13 +138,20 @@ void collectConservativeStackRoots(typename Traits::MarkQueue& markQueue, mm::Th
             internal::collectRoot<Traits>(markQueue, object);
         }
     }
+}
+
+// Kore: the heap objects the candidate words point into are roots. One lookup for many threads' candidates: each
+// lookup walks the heap's pages.
+template <typename Traits>
+void collectConservativeStackRoots(typename Traits::MarkQueue& markQueue, std::vector<ObjHeader**>& candidates) noexcept {
     mm::GlobalData::Instance().allocator().forEachHeapSlot(candidates, [&](ObjHeader**, ObjHeader* object) noexcept {
         internal::collectRoot<Traits>(markQueue, object);
     });
 }
 
 template <typename Traits>
-void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& markQueue, mm::ThreadData& thread) {
+void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& markQueue, mm::ThreadData& thread,
+                             std::vector<ObjHeader**>* stackCandidates = nullptr) {
     auto handle = gcHandle.collectThreadRoots(thread);
     // TODO: Remove useless mm::ThreadRootSet abstraction.
     for (auto value : mm::ThreadRootSet(thread)) {
@@ -157,7 +166,16 @@ void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& mark
             }
         }
     }
-    if (compiler::conservativeStacks()) collectConservativeStackRoots<Traits>(markQueue, thread);
+    if (compiler::conservativeStacks()) {
+        // Kore: with `stackCandidates`, the caller looks the candidates up (for all threads at once).
+        if (stackCandidates != nullptr) {
+            collectConservativeStackCandidates<Traits>(markQueue, thread, *stackCandidates);
+        } else {
+            std::vector<ObjHeader**> candidates;
+            collectConservativeStackCandidates<Traits>(markQueue, thread, candidates);
+            collectConservativeStackRoots<Traits>(markQueue, candidates);
+        }
+    }
 }
 
 template <typename Traits>
@@ -182,12 +200,14 @@ void collectRootSetGlobals(GCHandle gcHandle, typename Traits::MarkQueue& markQu
 template <typename Traits, typename F>
 void collectRootSet(GCHandle handle, typename Traits::MarkQueue& markQueue, F&& filter) noexcept {
     Traits::clear(markQueue);
+    std::vector<ObjHeader**> stackCandidates;
     for (auto& thread : mm::GlobalData::Instance().threadRegistry().LockForIter()) {
         if (!filter(thread))
             continue;
         thread.Publish();
-        collectRootSetForThread<Traits>(handle, markQueue, thread);
+        collectRootSetForThread<Traits>(handle, markQueue, thread, &stackCandidates);
     }
+    if (compiler::conservativeStacks()) collectConservativeStackRoots<Traits>(markQueue, stackCandidates);
     collectRootSetGlobals<Traits>(handle, markQueue);
 }
 
