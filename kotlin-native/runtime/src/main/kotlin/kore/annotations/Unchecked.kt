@@ -6,7 +6,7 @@
 package kore.annotations
 
 /**
- * Kore: removes the safety checks of the annotated function in optimized builds, for hot code whose indices and
+ * Removes the safety checks of the annotated function in optimized builds, for hot code whose indices and
  * references are known to be valid:
  *
  * - array index checks (`IndexOutOfBoundsException` of array and string accesses),
