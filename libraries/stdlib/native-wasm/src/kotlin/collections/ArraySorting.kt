@@ -475,7 +475,67 @@ private fun heapSort(array: IntArray, lo: Int, hi: Int) {
 private fun introSort(array: IntArray, fromIndex: Int, toIndex: Int) {
     val n = toIndex - fromIndex
     if (n < 2) return
+    if (n >= RADIX_SORT_THRESHOLD) {
+        radixSort(array, fromIndex, toIndex)
+        return
+    }
     introSort(array, fromIndex, toIndex - 1, 2 * (32 - (n - 1).countLeadingZeroBits()))
+}
+
+// Kore: large int arrays are sorted with a least significant digit radix sort: three counting passes of 11 bits (the
+// sign bit flipped in the last one), skipping a pass when every element has the same digit. Equal ints are
+// indistinguishable, so the result is the same as any other sort's.
+private const val RADIX_SORT_THRESHOLD = 1024
+private const val RADIX_BITS = 11
+private const val RADIX_SIZE = 1 shl RADIX_BITS
+private const val RADIX_MASK = RADIX_SIZE - 1
+private const val RADIX_SIGN_FLIP = 1 shl (31 - 2 * RADIX_BITS) // the sign bit in the top digit
+
+private fun radixSort(array: IntArray, fromIndex: Int, toIndex: Int) {
+    val n = toIndex - fromIndex
+    val counts = IntArray(3 * RADIX_SIZE)
+    for (i in fromIndex until toIndex) {
+        val v = array[i]
+        counts[v and RADIX_MASK]++
+        counts[RADIX_SIZE + ((v ushr RADIX_BITS) and RADIX_MASK)]++
+        counts[2 * RADIX_SIZE + ((v ushr (2 * RADIX_BITS)) xor RADIX_SIGN_FLIP)]++
+    }
+    var src = array
+    var srcFrom = fromIndex
+    var buffer: IntArray? = null
+    for (pass in 0 until 3) {
+        val base = pass * RADIX_SIZE
+        val shift = pass * RADIX_BITS
+        // Skip the pass if all elements have the same digit.
+        val first = src[srcFrom]
+        val firstDigit = if (pass == 2) (first ushr shift) xor RADIX_SIGN_FLIP else (first ushr shift) and RADIX_MASK
+        if (counts[base + firstDigit] == n) continue
+        var sum = 0
+        for (d in base until base + RADIX_SIZE) {
+            val c = counts[d]
+            counts[d] = sum
+            sum += c
+        }
+        val dst = if (src === array) (buffer ?: IntArray(n).also { buffer = it }) else array
+        val dstFrom = if (dst === array) fromIndex else 0
+        val srcTo = srcFrom + n
+        if (pass == 2) {
+            for (i in srcFrom until srcTo) {
+                val v = src[i]
+                val d = base + ((v ushr shift) xor RADIX_SIGN_FLIP)
+                dst[dstFrom + counts[d]++] = v
+            }
+        } else {
+            for (i in srcFrom until srcTo) {
+                val v = src[i]
+                val d = base + ((v ushr shift) and RADIX_MASK)
+                dst[dstFrom + counts[d]++] = v
+            }
+        }
+        src = dst
+        srcFrom = dstFrom
+    }
+    if (src !== array) src.copyInto(array, fromIndex, 0, n)
 }
 
 // Kore: introsort for the integral element types (as C++'s std::sort): median-of-three quicksort that recurses into the
