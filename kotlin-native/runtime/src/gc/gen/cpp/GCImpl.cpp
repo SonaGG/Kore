@@ -412,6 +412,32 @@ void verifyRememberedBeforeYoung(alloc::Allocator& allocator, uint64_t epoch) no
     konan::consoleErrorf("kore-gc-verify: epoch %llu: %zu old objects checked\n", static_cast<unsigned long long>(epoch), checked);
 }
 
+// Kore: debugging (`KORE_GC_VERIFY_YOUNG`), once the remembered sets are collected: every reference from an old object to
+// a young one is covered by the remembered set (its holder or its slot).
+void verifyOldToYoungRemembered(alloc::Allocator& allocator, const gc::internal::RememberedSet& set, uint64_t epoch) noexcept {
+    std::unordered_set<ObjHeader*> objects(set.objects.begin(), set.objects.end());
+    std::unordered_set<ObjHeader**> slots(set.slots.begin(), set.slots.end());
+    size_t checked = 0;
+    allocator.TraverseAllocatedObjects([&](ObjHeader* holder) {
+        auto& data = alloc::objectDataForObject(holder);
+        if (!data.old()) return;
+        ++checked;
+        if (objects.count(holder) != 0) return;
+        traverseObjectFields(holder, [&](auto accessor) {
+            ObjHeader** slot = accessor.direct().location();
+            ObjHeader* value = *slot;
+            if (value == nullptr || !value->heap() || alloc::objectDataForObject(value).oldOrSurviving()) return;
+            if (slots.count(slot) != 0) return;
+            konan::consoleErrorf(
+                    "kore-gc-verify: epoch %llu: old %p (type %p, word %p) slot %p refers to young %p (type %p) unremembered\n",
+                    static_cast<unsigned long long>(epoch), holder, holder->type_info(), reinterpret_cast<void*>(data.word()),
+                    slot, value, value->type_info());
+            std::abort();
+        });
+    });
+    konan::consoleErrorf("kore-gc-verify: epoch %llu: %zu old objects checked\n", static_cast<unsigned long long>(epoch), checked);
+}
+
 // Kore: debugging (`KORE_GC_VERIFY`), once the remembered sets are collected: no reference to a released nursery block
 // anywhere, and every reference to a movable object from an old object (in the heap or in a retained block) is covered
 // by the remembered set (its holder or its slot).
@@ -701,6 +727,8 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
 
     RememberedSet rememberedSet;
     collectRememberedSets(rememberedSet);
+    static const bool verifyYoung = std::getenv("KORE_GC_VERIFY_YOUNG") != nullptr;
+    if (verifyYoung) verifyOldToYoungRemembered(allocator_, rememberedSet, gcHandle.getEpoch());
     if (nursery) {
         static const bool verifyMark = std::getenv("KORE_GC_VERIFY") != nullptr;
         if (verifyMark) verifyBeforeYoungMark(allocator_, rememberedSet, gcHandle.getEpoch());
