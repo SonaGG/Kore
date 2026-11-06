@@ -26,15 +26,17 @@ internal data class LinkerPhaseInput(
 internal val LinkerPhase = createSimpleNamedCompilerPhase<NativeBackendPhaseContext, LinkerPhaseInput>(
         name = "Linker",
 ) { context, input ->
+    val pgoRuntime = pgoRuntimeLinkage(context, input.tempFiles, input.outputKind)
     val linker = Linker(
             config = context.config,
             linkerOutput = input.outputKind,
             outputFiles = input.outputFiles,
             tempFiles = input.tempFiles,
+            extraLinkerArgs = pgoRuntime?.linkerArgs.orEmpty(),
     )
     val commands = linker.linkCommands(
             input.outputFile,
-            input.objectFiles,
+            input.objectFiles + pgoRuntime?.objectFiles.orEmpty(),
             input.dependenciesTrackingResult,
             input.resolvedCacheBinaries
     )

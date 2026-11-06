@@ -52,6 +52,7 @@ internal class Linker(
     private val linkerOutput: LinkerOutputKind,
     private val outputFiles: OutputFiles,
     private val tempFiles: TempFiles,
+    private val extraLinkerArgs: List<String> = emptyList(), // Kore
 ) {
     private val platform = config.platform
     private val linker = platform.linker
@@ -146,7 +147,7 @@ internal class Linker(
         File(executable).delete()
 
         val linkerArgs = asLinkerArgs(config.configuration.getNotNull(NativeConfigurationKeys.LINKER_ARGS)) +
-                libraryProvidedLinkerFlags + additionalLinkerArgs
+                libraryProvidedLinkerFlags + additionalLinkerArgs + extraLinkerArgs
 
         return with(linker) {
             LinkerArguments(
