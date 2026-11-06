@@ -13,8 +13,11 @@
 #include "AtomicStack.hpp"
 #include "GCStatistics.hpp"
 #include "FixedBlockPage.hpp"
+#include "PageRegistry.hpp"
 
 namespace kotlin::alloc {
+
+struct ObjectSweepTraits;
 
 template <class T, typename SweepTraits>
 class PageStore {
@@ -85,6 +88,11 @@ public:
 
     T* NewPage(uint64_t cellCount) noexcept {
         T* page = T::Create(cellCount);
+        // Kore: pages of objects are registered for the young collection's address lookups (see `PageRegistry`).
+        if constexpr (std::is_same_v<SweepTraits, ObjectSweepTraits>) {
+            PageRegistry::Add(page->BlocksBegin(), page->BlocksEnd(),
+                              std::is_same_v<T, FixedBlockPage> ? PageRegistry::Kind::kFixedBlock : PageRegistry::Kind::kNextFit, page);
+        }
         used_.Push(page);
         return page;
     }
@@ -195,6 +203,9 @@ public:
 
     SingleObjectPage* NewPage(uint64_t cellCount) noexcept {
         auto* page = SingleObjectPage::Create(cellCount);
+        if constexpr (std::is_same_v<SweepTraits, ObjectSweepTraits>) {
+            PageRegistry::Add(page->Data(), page->Data() + AllocationSize::cells(cellCount).inBytes(), PageRegistry::Kind::kSingleObject, page);
+        }
         newlyAllocated_.Push(page);
         return page;
     }

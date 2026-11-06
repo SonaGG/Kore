@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "PageRegistry.hpp"
 #include "SingleObjectPage.hpp"
 
 #include <atomic>
@@ -48,6 +49,7 @@ std::vector<uint8_t*> SingleObjectPage::GetAllocatedBlocks() noexcept {
 }
 
 void SingleObjectPage::destroyImpl(AllocationSize objectSize) noexcept {
+    PageRegistry::Remove(this);
     auto& heap = mm::GlobalData::Instance().allocator().impl().heap();
     heap.allocatedSizeTracker().recordDifference(-static_cast<ptrdiff_t>(objectSize.inBytes()));
 

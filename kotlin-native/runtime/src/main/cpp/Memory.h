@@ -230,6 +230,8 @@ void ZeroStackRef(ObjHeader** location) RUNTIME_NOTHROW;
 void UpdateStackRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Updates heap/static data location.
 void UpdateHeapRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
+// Kore: updates a static field (global or thread-local) `location`. Same as UpdateHeapRef, for a location the GC scans as a root.
+void UpdateStaticRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 // Kore: updates a reference field or element `location` of `holder` (a heap, stack or permanent object). Same as
 // UpdateHeapRef, but lets the GC barrier use the holder (e.g. to skip stores into young objects).
 void UpdateHeapRefInObject(ObjHeader* holder, ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;

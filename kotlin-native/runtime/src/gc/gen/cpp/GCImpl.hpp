@@ -33,7 +33,7 @@ struct RememberedSet {
     std::vector<ObjHeader*> objects;
     // Kore: the slots recorded last, by hash: the same slots (atomic fields, globals) receive young objects again and
     // again, and the young collection sorts the slots in its pause.
-    std::array<ObjHeader**, 64> recentSlots{};
+    std::array<ObjHeader**, 1024> recentSlots{};
 
     void rememberSlot(ObjHeader** slot) noexcept {
         auto& recent = recentSlots[(reinterpret_cast<uintptr_t>(slot) >> 3) % recentSlots.size()];

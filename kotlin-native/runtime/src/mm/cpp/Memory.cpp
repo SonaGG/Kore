@@ -144,6 +144,13 @@ extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRef(ObjHeader** loc
     mm::RefAccessor<false>{location} = const_cast<ObjHeader*>(object);
 }
 
+extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateStaticRef(ObjHeader** location, const ObjHeader* object) {
+    auto* value = const_cast<ObjHeader*>(object);
+    mm::DirectRefAccessor ref{location};
+    gc::beforeStaticRefUpdate(ref, value);
+    ref.store(value);
+}
+
 extern "C" PERFORMANCE_INLINE RUNTIME_NOTHROW void UpdateHeapRefInObject(ObjHeader* holder, ObjHeader** location, const ObjHeader* object) {
     auto* value = const_cast<ObjHeader*>(object);
     mm::DirectRefAccessor ref{location};

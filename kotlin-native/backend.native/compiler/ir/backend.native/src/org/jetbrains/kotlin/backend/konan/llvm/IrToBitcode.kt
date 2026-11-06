@@ -1732,6 +1732,9 @@ internal class CodeGeneratorVisitor(
         if (thisPtr != null && field.type.binaryTypeIsReference() && !isVolatile) {
             // Kore: let the GC barrier know which object is written to.
             functionGenerationContext.storeHeapRefInObject(valueToAssign, address, thisPtr)
+        } else if (thisPtr == null && field.type.binaryTypeIsReference() && !isVolatile) {
+            // Kore: static fields are GC roots, the generational barrier need not remember them.
+            functionGenerationContext.storeStaticRef(valueToAssign, address)
         } else if (thisPtr != null && !isVolatile) {
             llvm.setFieldTbaa(functionGenerationContext.store(valueToAssign, address, alignment = alignment), LLVMTypeOf(valueToAssign)!!)
         } else {

@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "PageRegistry.hpp"
 #include "NextFitPage.hpp"
 
 #include <atomic>
@@ -21,6 +22,7 @@ NextFitPage* NextFitPage::Create(uint32_t cellCount) noexcept {
 }
 
 void NextFitPage::Destroy() noexcept {
+    PageRegistry::Remove(this);
     Free(this, SIZE);
 }
 

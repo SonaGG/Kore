@@ -87,6 +87,10 @@ ALWAYS_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader*
 
 ALWAYS_INLINE void gc::afterReferenceStoreInObject(ObjHeader* holder, ObjHeader* value) noexcept {}
 
+PERFORMANCE_INLINE void gc::beforeStaticRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
+    beforeHeapRefUpdate(ref, value, false);
+}
+
 ALWAYS_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {}
 
 // Kore: this GC has no barriers for stores into objects.

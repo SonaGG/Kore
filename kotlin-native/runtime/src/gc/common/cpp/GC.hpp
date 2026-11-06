@@ -92,6 +92,8 @@ private:
 };
 
 void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept;
+// Kore: like beforeHeapRefUpdate (non-atomic store), for a static field (a global or thread-local root).
+void beforeStaticRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value) noexcept;
 // Kore: like beforeHeapRefUpdate (non-atomic store), for a slot known to belong to `holder` (a heap, stack or permanent
 // object). Used by `UpdateHeapRefInObject`, which compiled code calls for field stores and the runtime for array stores.
 void beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept;

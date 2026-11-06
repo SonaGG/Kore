@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "PageRegistry.hpp"
 #include "FixedBlockPage.hpp"
 
 #include <atomic>
@@ -22,6 +23,7 @@ FixedBlockPage* FixedBlockPage::Create(uint32_t blockSize) noexcept {
 }
 
 void FixedBlockPage::Destroy() noexcept {
+    PageRegistry::Remove(this);
     Free(this, SIZE());
 }
 

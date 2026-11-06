@@ -722,11 +722,18 @@ void gc::internal::GenerationalGC::markRememberedSet(
     addresses.reserve(rememberedSet.slots.size() + stackCandidates.size());
     std::merge(rememberedSet.slots.begin(), rememberedSet.slots.end(), stackCandidates.begin(), stackCandidates.end(),
                std::back_inserter(addresses));
+    gc::pausePhase("slots-sort");
+    std::unordered_map<const TypeInfo*, size_t> slotOwnerTypes;
+    size_t heapSlots = 0;
     allocator_.forEachHeapSlot(addresses, [&](ObjHeader** slot, ObjHeader* owner) noexcept {
         if (std::binary_search(stackCandidates.begin(), stackCandidates.end(), slot)) {
             gc::internal::collectRoot<MarkTraits>(markQueue, owner);
         }
         if (!std::binary_search(rememberedSet.slots.begin(), rememberedSet.slots.end(), slot)) return;
+        if (reportCounts) {
+            ++heapSlots;
+            ++slotOwnerTypes[owner->type_info()];
+        }
         if (!alloc::objectDataForObject(owner).old()) return;
         ObjHeader* value = std_support::atomic_ref{*slot}.load(std::memory_order_relaxed);
         if (value != nullptr && value->heap()) {
@@ -738,6 +745,12 @@ void gc::internal::GenerationalGC::markRememberedSet(
     if (reportCounts) {
         konan::consoleErrorf("[kore-gc] slots: %zu addresses, %zu needed page ranges (%zu ranges)\n", addresses.size(),
                              alloc::gLastSlowHeapSlots, alloc::gLastHeapRanges);
+        std::vector<std::pair<size_t, const TypeInfo*>> types;
+        for (auto& [type, count] : slotOwnerTypes) types.emplace_back(count, type);
+        std::sort(types.rbegin(), types.rend());
+        konan::consoleErrorf("[kore-gc] slot owners: %zu unique slots, %zu in heap objects:", rememberedSet.slots.size(), heapSlots);
+        for (size_t i = 0; i < types.size() && i < 5; ++i) konan::consoleErrorf(" %p x%zu", types[i].second, types[i].first);
+        konan::consoleErrorf("\n");
     }
     // Kore: slots in old objects of retained nursery blocks, which the allocator does not know.
     if (alloc::nursery::enabled()) {
@@ -1036,6 +1049,12 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHe
 // Write barrier for field and array element stores (`UpdateHeapRefInObject`), i.e. almost every heap reference store.
 // Stores into young objects (the common case, e.g. initializing a new object) need nothing: young objects are traced
 // if reachable.
+// Kore: static fields are roots of every collection, so only the snapshot-at-the-beginning barrier applies: recording the
+// slot for the young collection would only add an entry it drops (it only resolves slots inside heap objects).
+PERFORMANCE_INLINE void gc::beforeStaticRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
+    barriers::beforeHeapRefUpdate(ref, value, false);
+}
+
 PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::DirectRefAccessor ref, ObjHeader* value) noexcept {
     // Kore: with conservative stack scanning, objects allocated on the stack lie in the scanned stack: like stack slots,
     // their fields need no barrier (the scan sees them at every collection, so they are in the marking snapshot and are
