@@ -518,6 +518,12 @@ private val primitiveCompareValuesPhase = createFileLoweringPhase(
         prerequisite = setOf(computeTypesPhase)
 )
 
+private val primitiveVariableNarrowingPhase = createFileLoweringPhase(
+        name = "PrimitiveVariableNarrowing",
+        lowering = { context: Context -> PrimitiveVariableNarrowingLowering(context) },
+        prerequisite = setOf(computeTypesPhase)
+)
+
 private val optimizeCastsPhase = createFileLoweringPhase(
         name = "OptimizeCasts",
         lowering = { context: Context -> CastsOptimization(context) },
@@ -664,6 +670,7 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         finallyBlocksPhase,
         computeTypesPhase, // Inliner erases generics. Trying to restore some of the information and simplify IR.
         primitiveCompareValuesPhase, // Kore: after the types are restored.
+        primitiveVariableNarrowingPhase, // Kore: likewise.
         forLoopsPhase,
         flattenStringConcatenationPhase,
         stringConcatenationPhase,
