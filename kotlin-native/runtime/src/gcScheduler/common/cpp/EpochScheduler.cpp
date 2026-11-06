@@ -25,6 +25,7 @@ Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpoch(ScheduleReason re
                 *scheduled <= epoch, "Scheduled epoch %" PRId64 " which is somehow less previously scheduled %" PRId64, epoch, *scheduled);
     }
     scheduledEpoch_ = epoch;
+    scheduledEpochRelaxed_.store(epoch, std::memory_order_release);
     reason.log();
     return epoch;
 }
@@ -32,6 +33,8 @@ Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpoch(ScheduleReason re
 Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpochIfNotInProgress(ScheduleReason reason) noexcept {
     // The locks here are always short-lived,
     // so we ignore thread state switching to avoid recursive safe points.
+    // Kore: lock-free when already scheduled (the common case for allocating threads).
+    if (auto scheduled = scheduledEpochRelaxed_.load(std::memory_order_acquire); scheduled >= 0) return scheduled;
     CallsCheckerIgnoreGuard ignoreGuard;
     std::unique_lock guard(scheduledEpochMutex_);
     if (auto scheduled = scheduledEpoch_) {
@@ -39,6 +42,7 @@ Epoch gcScheduler::internal::EpochScheduler::scheduleNextEpochIfNotInProgress(Sc
     }
     auto epoch = scheduleGC_(reason);
     scheduledEpoch_ = epoch;
+    scheduledEpochRelaxed_.store(epoch, std::memory_order_release);
     reason.log();
     return epoch;
 }
@@ -55,4 +59,5 @@ void gcScheduler::internal::EpochScheduler::onGCFinish(Epoch epoch) noexcept {
         return;
     // Current GC epoch is finished.
     scheduledEpoch_ = std::nullopt;
+    scheduledEpochRelaxed_.store(-1, std::memory_order_release);
 }
