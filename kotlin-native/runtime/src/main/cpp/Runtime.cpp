@@ -80,7 +80,10 @@ std::atomic<GlobalRuntimeStatus> globalRuntimeStatus = kGlobalRuntimeUninitializ
 
 void Kotlin_deinitRuntimeCallback(void* argument);
 
+extern "C" void Kotlin_installCrashReport(); // Kore: see StackTrace.cpp.
+
 NO_INLINE RuntimeState* initRuntime() {
+  Kotlin_installCrashReport();
   SetKonanTerminateHandler();
   initObjectPool();
   RuntimeState* result = new RuntimeState();

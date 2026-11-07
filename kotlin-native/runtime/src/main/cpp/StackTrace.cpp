@@ -373,6 +373,15 @@ std_support::span<char> snprintf_with_addr(std_support::span<char> buffer, size_
 #endif
 
     AddressToSymbol(addr, symbol, sizeof(symbol), symbol_offset);
+    // Kore: the compiler renames the local symbols it makes external to compile parts of a program in parallel (with a
+    // `.kore` suffix, `.kore.rt` for the runtime's), show their source names.
+    for (const char* suffix : {".kore.rt", ".kore"}) {
+        size_t length = strlen(symbol), suffixLength = strlen(suffix);
+        if (length > suffixLength && strcmp(symbol + length - suffixLength, suffix) == 0) {
+            symbol[length - suffixLength] = '\0';
+            break;
+        }
+    }
 
     buffer = FormatToSpan(buffer, "%-4zd%-35s %-18p %s + %td ", frame, image, addr, symbol, symbol_offset);
     if (is_inline) {
@@ -500,3 +509,79 @@ NO_INLINE void kotlin::PrintStackTraceStderr() {
         konan::consoleErrorf("\n");
     }
 }
+
+// Kore: a report for crashes (unhandled native exceptions, e.g. access violations) on Windows, which otherwise end the
+// process without a word: the exception, its address, and the stack of the faulting thread as module offsets
+// (symbolized offline, e.g. with llvm-symbolizer). It is written with no allocation, then the previous filter runs.
+#if defined(KONAN_WINDOWS) && defined(__x86_64__)
+#include <windows.h>
+#include <cstdio>
+
+namespace {
+
+LPTOP_LEVEL_EXCEPTION_FILTER gPreviousCrashFilter = nullptr;
+
+void crashWrite(const char* text, int length) noexcept {
+    DWORD written = 0;
+    WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, static_cast<DWORD>(length), &written, nullptr);
+}
+
+void crashFrame(int index, DWORD64 rip) noexcept {
+    char line[512];
+    HMODULE module = nullptr;
+    char path[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(rip), &module)) {
+        GetModuleFileNameA(module, path, sizeof(path));
+    }
+    const char* name = strrchr(path, '\\');
+    name = name != nullptr ? name + 1 : path;
+    int length = snprintf(line, sizeof(line), "kore-crash:   #%02d %016llx %s+0x%llx\n", index, static_cast<unsigned long long>(rip), name,
+                          static_cast<unsigned long long>(rip - reinterpret_cast<DWORD64>(module)));
+    crashWrite(line, length);
+}
+
+LONG WINAPI koreCrashFilter(EXCEPTION_POINTERS* info) {
+    static volatile LONG reporting = 0;
+    if (InterlockedExchange(&reporting, 1) == 0) {
+        auto* record = info->ExceptionRecord;
+        char line[256];
+        int length = snprintf(line, sizeof(line), "kore-crash: exception 0x%08lx at %p (thread %lu)", record->ExceptionCode,
+                              record->ExceptionAddress, GetCurrentThreadId());
+        crashWrite(line, length);
+        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
+            length = snprintf(line, sizeof(line), ", %s of %p", record->ExceptionInformation[0] == 1 ? "write" : "read",
+                              reinterpret_cast<void*>(record->ExceptionInformation[1]));
+            crashWrite(line, length);
+        }
+        CONTEXT context = *info->ContextRecord;
+        length = snprintf(line, sizeof(line), "\nkore-crash: rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rsp=%llx rbp=%llx\n",
+                          context.Rax, context.Rbx, context.Rcx, context.Rdx, context.Rsi, context.Rdi, context.Rsp, context.Rbp);
+        crashWrite(line, length);
+        for (int i = 0; i < 64 && context.Rip != 0; ++i) {
+            crashFrame(i, context.Rip);
+            DWORD64 imageBase = 0;
+            PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+            if (function == nullptr) {
+                // A leaf function: the return address is at the top of the stack.
+                context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                context.Rsp += 8;
+            } else {
+                PVOID handlerData = nullptr;
+                DWORD64 establisherFrame = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData, &establisherFrame, nullptr);
+            }
+        }
+    }
+    return gPreviousCrashFilter != nullptr ? gPreviousCrashFilter(info) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+} // namespace
+
+extern "C" void Kotlin_installCrashReport() {
+    static volatile LONG installed = 0;
+    if (InterlockedExchange(&installed, 1) == 0) gPreviousCrashFilter = SetUnhandledExceptionFilter(koreCrashFilter);
+}
+#else
+extern "C" void Kotlin_installCrashReport() {}
+#endif
