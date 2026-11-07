@@ -48,6 +48,18 @@ public:
 
     ALWAYS_INLINE uintptr_t load() const noexcept { return __atomic_load_n(word_, __ATOMIC_RELAXED); }
 
+    // Kore: the low half of the word, which holds all the GC bits. With compact headers the high half of the header
+    // word is the object's first field: a store to it just before (as in a constructor) would delay a load of the whole
+    // word, which the store buffer cannot forward to (it only partially overlaps the store).
+    ALWAYS_INLINE uint32_t loadLow() const noexcept {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+        using Low = uint32_t __attribute__((may_alias));
+        return __atomic_load_n(reinterpret_cast<Low*>(word_), __ATOMIC_RELAXED);
+#else
+        return static_cast<uint32_t>(load());
+#endif
+    }
+
     // Sets the mark bit. Returns whether it was not set before.
     ALWAYS_INLINE bool tryMark() noexcept {
         if ((load() & kMarked) != 0) return false;
