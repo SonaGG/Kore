@@ -1179,6 +1179,8 @@ PERFORMANCE_INLINE void gc::beforeHeapRefUpdateInObject(ObjHeader* holder, mm::D
 #endif
     if (compiler::conservativeStacks() && tag == OBJECT_TAG_STACK) return;
     barriers::beforeHeapRefUpdate(ref, value, false);
+    // Kore: a null store makes no old-to-young reference (and for a constant null, this folds the rest away).
+    if (value == nullptr) return;
     // Kore: only the common case (a young heap holder) is inlined into compiled code; old holders go out of line, which
     // keeps the code of every reference store small (and the functions doing them inlinable).
     if (__builtin_expect(tag != OBJECT_TAG_HEAP, false)) return; // Stack objects are roots; permanent objects are immutable.
