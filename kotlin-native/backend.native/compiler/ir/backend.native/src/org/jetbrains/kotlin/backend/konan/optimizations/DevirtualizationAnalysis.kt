@@ -1734,6 +1734,35 @@ internal object DevirtualizationAnalysis {
             }
         }
 
+        // Kore: see the use. Null if the receiver's static type says nothing.
+        fun narrowByTypeArguments(
+                call: IrCall,
+                callees: List<Pair<DataFlowIR.FunctionSymbol, List<DataFlowIR.Type>>>,
+        ): List<Pair<DataFlowIR.FunctionSymbol, List<DataFlowIR.Type>>>? {
+            val owner = call.symbol.owner.parentClassOrNull ?: return null
+            if (owner.typeParameters.isEmpty()) return null
+            val static = call.arguments[0]?.type as? org.jetbrains.kotlin.ir.types.IrSimpleType ?: return null
+            if (static.classifier != owner.symbol) return null
+            val expected = static.arguments.map {
+                val type = (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type as? org.jetbrains.kotlin.ir.types.IrSimpleType ?: return null
+                if (type.classifier !is org.jetbrains.kotlin.ir.symbols.IrClassSymbol) return null
+                type
+            }
+            fun matches(receiver: DataFlowIR.Type): Boolean {
+                val irClass = receiver.irClass ?: return true
+                val supertype = irClass.superTypes.firstOrNull { (it as? org.jetbrains.kotlin.ir.types.IrSimpleType)?.classifier == owner.symbol }
+                        as? org.jetbrains.kotlin.ir.types.IrSimpleType ?: return true // Inherited: not known here.
+                return supertype.arguments.size == expected.size && supertype.arguments.indices.all { i ->
+                    val actual = (supertype.arguments[i] as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type as? org.jetbrains.kotlin.ir.types.IrSimpleType
+                    actual != null && actual.classifier == expected[i].classifier && actual.nullability == expected[i].nullability
+                }
+            }
+            return callees.mapNotNull { entry ->
+                val kept = entry.second.filter(::matches)
+                if (kept.isEmpty()) null else entry.first to kept
+            }
+        }
+
         val changedDeclarations = mutableSetOf<IrDeclaration>()
         var callSitesCount = 0
         var devirtualizedCallSitesCount = 0
@@ -1748,7 +1777,7 @@ internal object DevirtualizationAnalysis {
                 if (expression.superQualifierSymbol == null && expression.symbol.owner.isOverridable)
                     ++callSitesCount
                 val devirtualizedCallSite = expression.devirtualizedCallSite ?: return expression
-                val possibleCallees = devirtualizedCallSite.possibleCallees
+                var possibleCallees = devirtualizedCallSite.possibleCallees
                         .groupBy { it.callee }
                         .entries.map { entry -> entry.key to entry.value.map { it.receiverType }.distinct() }
 
@@ -1758,9 +1787,18 @@ internal object DevirtualizationAnalysis {
                 // TODO: Think how to evaluate different unfold factors (in terms of both execution speed and code size).
                 val maxUnfoldFactor = if (owner.isInterface) maxITableUnfoldFactor else maxVTableUnfoldFactor
                 ++devirtualizedCallSitesCount
+                // Kore: when there are too many callees, those whose receivers implement the called generic interface with
+                // the receiver's static type arguments (e.g. the `(Int) -> Int` lambdas at a call of a `(Int) -> Int`),
+                // with a virtual call for any other receiver (its static type arguments are not checked at run time).
+                var withFallback = false
                 if (possibleCallees.size > maxUnfoldFactor) {
-                    // Callsite too complicated to devirtualize.
-                    return expression
+                    val narrowed = narrowByTypeArguments(expression, possibleCallees)
+                    if (narrowed == null || narrowed.isEmpty() || narrowed.size > maxUnfoldFactor) {
+                        // Callsite too complicated to devirtualize.
+                        return expression
+                    }
+                    possibleCallees = narrowed
+                    withFallback = true
                 }
                 ++actuallyDevirtualizedCallSitesCount
                 changedDeclarations.add(caller as IrDeclaration)
@@ -1860,7 +1898,7 @@ internal object DevirtualizationAnalysis {
                             bestOrder!!.mapIndexedTo(branches) { index, target ->
                                 (val actualCallee, val receiverTypes = possibleReceivers) = target
                                 val condition = when {
-                                    optimize && index == possibleCallees.size - 1 -> {
+                                    optimize && !withFallback && index == possibleCallees.size - 1 -> {
                                         // Don't check the last type in optimize mode.
                                         irTrue()
                                     }
@@ -1891,7 +1929,12 @@ internal object DevirtualizationAnalysis {
                                         result = irDevirtualizedCall(expression, type, actualCallee, arguments)
                                 )
                             }
-                            if (!optimize) { // Add else branch throwing exception for debug purposes.
+                            if (withFallback) {
+                                expression.arguments[0] = irGet(receiver)
+                                for (index in 1 until arguments.size)
+                                    expression.arguments[index] = arguments[index].getFullValue(this@irBlock)
+                                branches.add(IrBranchImpl(startOffset, endOffset, irTrue(), expression))
+                            } else if (!optimize) { // Add else branch throwing exception for debug purposes.
                                 branches.add(
                                         IrBranchImpl(
                                                 startOffset = startOffset,
