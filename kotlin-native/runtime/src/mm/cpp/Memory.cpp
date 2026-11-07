@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "Common.h"
 #include "Memory.h"
 #include "MemoryPrivate.hpp"
 
@@ -102,12 +103,12 @@ extern "C" void ClearMemoryForTests(MemoryState* state) {
     state->GetThreadData()->ClearForTests();
 }
 
-extern "C" RUNTIME_NOTHROW OBJ_GETTER(AllocInstance, const TypeInfo* typeInfo) {
+extern "C" RUNTIME_NOTHROW PERFORMANCE_INLINE OBJ_GETTER(AllocInstance, const TypeInfo* typeInfo) {
     auto* threadData = mm::ThreadRegistry::Instance().CurrentThreadData();
     RETURN_RESULT_OF(mm::AllocateObject, threadData, typeInfo);
 }
 
-extern "C" OBJ_GETTER(AllocArrayInstance, const TypeInfo* typeInfo, int32_t elements) {
+extern "C" PERFORMANCE_INLINE OBJ_GETTER(AllocArrayInstance, const TypeInfo* typeInfo, int32_t elements) {
     if (elements < 0) {
         ThrowIllegalArgumentException();
     }

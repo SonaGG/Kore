@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "Common.h"
 #include "CustomAllocator.hpp"
 
 #include <cstdlib>
@@ -44,7 +45,7 @@ CustomAllocator::~CustomAllocator() {
     heap_.AddToFinalizerQueue(std::move(finalizerQueue_));
 }
 
-ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
+PERFORMANCE_INLINE ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
     // Kore: the common case, small enough to be inlined into the compiled code (the runtime is linked with it): bump
     // allocation in the thread's nursery block, or else in its current Immix hole. Both are zeroed. Everything else
     // (refills, objects with finalizers, other allocators) is out of line.
@@ -99,7 +100,7 @@ ObjHeader* CustomAllocator::CreateObjectSlowPath(const TypeInfo* typeInfo) noexc
     return object;
 }
 
-ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t count) noexcept {
+PERFORMANCE_INLINE ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t count) noexcept {
     // Kore: as CreateObject: small arrays are bump-allocated in the current Immix hole (zeroed), inlined into the
     // compiled code; everything else (refills, the nursery, large arrays and their hints) is out of line.
     if (compiler::immix() && compiler::gcNurserySize() == 0) {

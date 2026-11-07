@@ -205,7 +205,7 @@ extern "C" OBJ_GETTER(CreateStringFromUtf16, const KChar* utf16, uint32_t length
     RETURN_RESULT_OF(createString<StringEncoding::kUTF16>, length, [=](KChar* out) { std::copy_n(utf16, length, out); });
 }
 
-extern "C" OBJ_GETTER(CreateUninitializedString, StringEncoding encoding, uint32_t length) {
+extern "C" PERFORMANCE_INLINE OBJ_GETTER(CreateUninitializedString, StringEncoding encoding, uint32_t length) {
     if (length == 0) RETURN_RESULT_OF0(TheEmptyString);
     return allocateString(encoding, length, [=](size_t sizeInChars) {
         RETURN_RESULT_OF(AllocArrayInstance, theStringTypeInfo, sizeInChars);
