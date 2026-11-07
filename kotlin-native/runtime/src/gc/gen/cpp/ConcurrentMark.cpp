@@ -219,6 +219,8 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
         // As `collectRootSet`, but the conservative stack candidates of all threads are looked up with the remembered
         // set's slots.
         MarkTraits::clear(worker);
+        // Kore: the roots stay where they are (docs/kore/immix-nursery.md).
+        if (evacuating && compiler::immixNursery()) internal::gNurseryRootPhase.store(true, std::memory_order_relaxed);
         std::vector<ObjHeader**> stackCandidates;
         for (auto& thread : mm::GlobalData::Instance().threadRegistry().LockForIter()) {
             thread.Publish();
@@ -229,6 +231,7 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
             collectConservativeStackRoots<MarkTraits>(worker, stackCandidates);
             stackCandidates.clear();
         }
+        internal::gNurseryRootPhase.store(false, std::memory_order_relaxed);
         gc::pausePhase("roots");
         if (evacuating) startHelpers(helper);
         markRememberedSets(worker, stackCandidates);

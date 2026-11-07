@@ -96,6 +96,16 @@ bool kotlin::alloc::ObjectSweepTraits::trySweepElement(uint8_t* object, Finalize
     return true;
 }
 
+size_t kotlin::alloc::nurseryElementBytes(uint8_t* element) noexcept {
+    auto* object = reinterpret_cast<CustomHeapObject*>(element)->object();
+    uintptr_t header = __atomic_load_n(reinterpret_cast<uintptr_t*>(object), __ATOMIC_ACQUIRE);
+    if ((header & OBJECT_TAG_MASK) == 2) {
+        // Copied: the original's header is the copy's address; the copy has the same size.
+        return CustomAllocator::GetAllocatedHeapSize(reinterpret_cast<ObjHeader*>(header & ~uintptr_t(7)));
+    }
+    return ObjectSweepTraits::elementSize(element).inBytes();
+}
+
 kotlin::alloc::AllocationSize kotlin::alloc::ObjectSweepTraits::elementSize(uint8_t* data) {
     auto* object = reinterpret_cast<kotlin::alloc::CustomHeapObject*>(data)->object();
     return AllocationSize::bytesAtLeast(CustomAllocator::GetAllocatedHeapSize(object));

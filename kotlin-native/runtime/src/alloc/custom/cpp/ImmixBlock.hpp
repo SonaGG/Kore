@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 #include <cstring>
 #include <vector>
 
@@ -17,6 +18,16 @@
 #include "KAssert.h"
 
 namespace kotlin::alloc {
+
+// Kore: the nursery (docs/kore/immix-nursery.md). While set (from the start of a full collection to the next young
+// collection), mutators set the start bits of the objects they allocate in nursery blocks, as everywhere else.
+inline std::atomic<bool> gNurseryStartBits{false};
+ALWAYS_INLINE inline bool nurseryStartBits() noexcept {
+    return gNurseryStartBits.load(std::memory_order_relaxed);
+}
+
+// The bytes of the heap object at `element` in a nursery block: its copy's, if it was copied (tag 2 in its header).
+size_t nurseryElementBytes(uint8_t* element) noexcept;
 
 // Kore: memory v2 (docs/kore/memory-v2.md). A 32 KiB block of 256-byte lines for small and medium objects (Immix,
 // Blackburn & McKinley, PLDI 2008). Blocks are aligned to their size, so any address maps to its block by masking.
@@ -57,6 +68,13 @@ public:
         block->starts_[granule / 64] |= uint64_t(1) << (granule % 64);
     }
 
+    // Kore: as MarkStart, safe against concurrent setters of other bits of the same word.
+    static void MarkStartAtomic(uint8_t* address) noexcept {
+        auto* block = Of(address);
+        size_t granule = (reinterpret_cast<uintptr_t>(address) & (kBlockSize - 1)) / kGranule;
+        __atomic_fetch_or(&block->starts_[granule / 64], uint64_t(1) << (granule % 64), __ATOMIC_RELAXED);
+    }
+
     bool IsStart(const void* address) const noexcept {
         size_t granule = (reinterpret_cast<uintptr_t>(address) & (kBlockSize - 1)) / kGranule;
         return (starts_[granule / 64] & (uint64_t(1) << (granule % 64))) != 0;
@@ -92,6 +110,21 @@ public:
     // objects fill holes between old ones, and are worth moving out (see `alloc::canEvacuate`).
     bool Recycled() const noexcept { return recycled_; }
     void SetRecycled(bool recycled) noexcept { recycled_ = recycled; }
+
+    // Kore: the nursery (docs/kore/immix-nursery.md). A whole free block a mutator allocates into since the last
+    // collection: its survivors are copied out (see `alloc::canEvacuate`). Cleared when the block is swept or taken.
+    bool Nursery() const noexcept { return nursery_; }
+    void SetNursery(bool nursery) noexcept {
+        nursery_ = nursery;
+        nurseryTop_ = static_cast<uint32_t>(FirstLine() * kLineSize);
+        nurseryStartsBuilt_.store(false, std::memory_order_relaxed);
+    }
+    // Where the objects of a nursery block end (they are laid out back to back from `Begin()`).
+    void SetNurseryTop(const uint8_t* top) noexcept {
+        nurseryTop_ = static_cast<uint32_t>(top - reinterpret_cast<uint8_t*>(this));
+    }
+    // Sets the start bits of all the objects of a nursery block, once (the world is stopped).
+    void EnsureNurseryStarts() noexcept;
 
     // Whether the free memory of the block is known to be zeroed (the block was never allocated into).
     bool Zeroed() const noexcept { return zeroed_; }
@@ -164,6 +197,9 @@ private:
     uint32_t freeLines_ = 0;
     bool zeroed_ = true;
     bool recycled_ = false;
+    bool nursery_ = false;
+    std::atomic<bool> nurseryStartsBuilt_ = false;
+    uint32_t nurseryTop_ = 0;
     uint8_t lines_[kLineCount];
     uint64_t starts_[kStartWords];
     uint64_t pins_[kStartWords]; // Kore: see `Pin`.

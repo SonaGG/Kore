@@ -2984,7 +2984,9 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleR
         setRuntimeConstGlobal(NativeRuntimeConstants.COMPRESSED_REFS, config.compressedRefs.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.COMPRESSED_REFS_ZERO_BASED, config.compressedRefsZeroBased.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.COMPACT_HEADERS, config.compactHeaders.toLlvmConstInt32())
-        setRuntimeConstGlobal(NativeRuntimeConstants.IMMIX_EVACUATION, config.immixEvacuation.toLlvmConstInt32())
+        // Kore: 0 none, 1 out of recycled blocks, 2 the nursery (see `compiler::immixNursery`).
+        setRuntimeConstGlobal(NativeRuntimeConstants.IMMIX_EVACUATION,
+                (if (config.immixNursery) 2 else if (config.immixEvacuation) 1 else 0).toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.GC_WORD, config.gcWord.toLlvmConstInt32())
         setRuntimeConstGlobal(NativeRuntimeConstants.PAGED_ALLOCATOR, config.pagedAllocator.toLlvmConstInt32())
     }

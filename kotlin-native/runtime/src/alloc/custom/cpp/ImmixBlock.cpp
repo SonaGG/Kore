@@ -41,6 +41,22 @@ uint8_t* alloc::ImmixBlock::StartAtOrBefore(const void* address) noexcept {
     return reinterpret_cast<uint8_t*>(this) + (word * 64 + bit) * kGranule;
 }
 
+void alloc::ImmixBlock::EnsureNurseryStarts() noexcept {
+    if (!nursery_ || nurseryStartsBuilt_.load(std::memory_order_acquire)) return;
+    static std::mutex mutex;
+    std::unique_lock guard(mutex);
+    if (nurseryStartsBuilt_.load(std::memory_order_relaxed)) return;
+    auto* base = reinterpret_cast<uint8_t*>(this);
+    uint8_t* end = base + nurseryTop_;
+    for (uint8_t* element = Begin(); element < end;) {
+        // A zero word: nothing was allocated from here on (cannot happen below the top, but stay safe).
+        if (*reinterpret_cast<const uintptr_t*>(element) == 0) break;
+        MarkStart(element);
+        element += nurseryElementBytes(element);
+    }
+    nurseryStartsBuilt_.store(true, std::memory_order_release);
+}
+
 std::vector<uint8_t*> alloc::ImmixBlock::GetAllocatedBlocks() noexcept {
     std::vector<uint8_t*> allocated;
     TraverseAllocatedBlocks([&allocated](uint8_t* block) { allocated.push_back(block); });

@@ -282,6 +282,10 @@ class NativeSecondStageCompilationConfig(
     val immixEvacuation: Boolean
         get() = (configuration.get(BinaryOptions.immixEvacuation) ?: false) && gcWordSupportedOff && !gcWord
 
+    // Kore: the copying young generation in the Immix heap (see `BinaryOptions.immixNursery`). Builds on evacuation.
+    val immixNursery: Boolean
+        get() = (configuration.get(BinaryOptions.immixNursery) ?: false) && gcWordSupportedOff && !gcWord
+
     private val compressedRefsSupported: Boolean
         get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u &&
                 target.architecture == Architecture.X64 &&

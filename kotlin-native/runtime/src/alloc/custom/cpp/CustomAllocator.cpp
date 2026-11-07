@@ -62,7 +62,7 @@ ObjHeader* CustomAllocator::CreateObject(const TypeInfo* typeInfo) noexcept {
             uint8_t* top = immixCursor_;
             if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
                 immixCursor_ = top + bytes;
-                ImmixBlock::MarkStart(top);
+                if (NeedsStartBits()) ImmixBlock::MarkStart(top);
                 memory = top;
             }
         }
@@ -90,6 +90,7 @@ ObjHeader* CustomAllocator::CreateObjectSlowPath(const TypeInfo* typeInfo) noexc
     if (hasFinalizer) {
         auto* extraObject = CreateExtraObjectDataForObject(object, typeInfo);
         object->typeInfoOrMeta_ = reinterpret_cast<TypeInfo*>(extraObject);
+        nurseryKeepInPlace(object); // Kore: finalized where it is (docs/kore/immix-nursery.md).
         CustomAllocDebug("CustomAllocator: %p gets extraObject %p", object, extraObject);
         CustomAllocDebug("CustomAllocator: %p->BaseObject == %p", extraObject, extraObject->GetBaseObject());
     } else {
@@ -109,7 +110,7 @@ ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typeInfo, uint32_t cou
             size_t bytes = AllocationSize::bytesAtLeast(size).inBytes();
             if (__builtin_expect(bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
                 immixCursor_ = top + bytes;
-                ImmixBlock::MarkStart(top);
+                if (NeedsStartBits()) ImmixBlock::MarkStart(top);
                 auto& heapArray = *descriptor.construct(top);
                 ArrayHeader* array = heapArray.array();
                 array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
@@ -145,6 +146,9 @@ ArrayHeader* CustomAllocator::CreateArraySlowPath(const TypeInfo* typeInfo, uint
 }
 
 mm::ExtraObjectData* CustomAllocator::CreateExtraObjectDataForObject(ObjHeader* baseObject, const TypeInfo* type) noexcept {
+    // Kore: the object never moves from now on (docs/kore/immix-nursery.md). Not while it is being created (no header yet):
+    // CreateObjectSlowPath does it then.
+    if (baseObject->typeInfoOrMeta_ != nullptr) nurseryKeepInPlace(baseObject);
     CustomAllocDebug("CustomAllocator@%p::CreateExtraObjectDataForObject(%p)", this ,baseObject);
     auto* extraObjectCell = reinterpret_cast<ExtraObjectCell*>(AllocateExtraObjectData());
     return new (extraObjectCell->data_) mm::ExtraObjectData(baseObject, type);
@@ -226,6 +230,8 @@ uint8_t* CustomAllocator::AllocateLargerThanImmix(uint64_t cellCount, bool poll)
 }
 
 void CustomAllocator::ResetImmix() noexcept {
+    SealNursery();
+    nurseryBlock_ = nullptr;
     immixCursor_ = immixLimit_ = nullptr;
     immixBlock_ = nullptr;
     immixNextLine_ = 0;
@@ -253,8 +259,22 @@ uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size, bool poll
         uint8_t* top = immixCursor_;
         if (bytes <= static_cast<size_t>(immixLimit_ - top)) {
             immixCursor_ = top + bytes;
-            ImmixBlock::MarkStart(top);
+            if (NeedsStartBits()) ImmixBlock::MarkStart(top);
             return top;
+        }
+        // Kore: the nursery (docs/kore/immix-nursery.md): a mutator bumps through whole free blocks.
+        if (compiler::immixNursery() && !evacuation_) {
+            if (poll) {
+                pollIfAttached();
+                if (bytes <= static_cast<size_t>(immixLimit_ - immixCursor_)) continue;
+            }
+            SealNursery();
+            ImmixBlock* block = heap_.immixBlocks().TakeFreeBlock();
+            block->SetNursery(true);
+            immixBlock_ = nullptr;
+            nurseryBlock_ = block;
+            TakeImmixHole(block, block->Begin(), block->End(), immixCursor_, immixLimit_);
+            continue;
         }
         uint8_t* start;
         uint8_t* end;
@@ -288,6 +308,7 @@ uint8_t* CustomAllocator::AllocateInImmixOverflow(size_t bytes, bool poll) noexc
             if (bytes <= static_cast<size_t>(overflowLimit_ - overflowCursor_)) continue;
         }
         ImmixBlock* block = heap_.immixBlocks().TakeFreeBlock();
+        if (compiler::immixNursery() && !evacuation_) block->SetNursery(true);
         TakeImmixHole(block, block->Begin(), block->End(), overflowCursor_, overflowLimit_);
     }
 }

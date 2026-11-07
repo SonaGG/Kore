@@ -5,6 +5,10 @@
 
 #pragma once
 
+#include <memory>
+#include <mutex>
+#include <vector>
+
 #include "Allocator.hpp"
 
 #include "CustomAllocator.hpp"
@@ -19,6 +23,7 @@ class Allocator::Impl : private Pinned {
 public:
     Impl() noexcept : finalizerProcessor_([](int64_t epoch) noexcept { mm::GlobalData::Instance().gc().onEpochFinalized(epoch); }) {
         Nursery::initialize();
+        evacuationAllocator_.SetEvacuation();
     }
 
     Heap& heap() noexcept { return heap_; }
@@ -26,10 +31,16 @@ public:
     SegregatedFinalizerProcessor<FinalizerQueueSingle, FinalizerQueueTraits>& finalizerProcessor() noexcept { return finalizerProcessor_; }
     // Kore: the GC thread's allocator for objects moved out of the nursery.
     CustomAllocator& evacuationAllocator() noexcept { return evacuationAllocator_; }
+    // Kore: one evacuation allocator per GC thread, so that parallel workers copy without a lock (and each worker's copies
+    // stay together). Created on first use, kept for the next collections.
+    CustomAllocator& evacuationAllocatorForCurrentThread() noexcept;
+    void finishEvacuation() noexcept;
 
 private:
     Heap heap_;
     CustomAllocator evacuationAllocator_{heap_};
+    std::mutex evacuationAllocatorsMutex_;
+    std::vector<std::unique_ptr<CustomAllocator>> evacuationAllocators_;
     // Preallocated place for finalizers for avoiding memory allocation during GC.
     FinalizerQueue pendingFinalizers_;
     SegregatedFinalizerProcessor<FinalizerQueueSingle, FinalizerQueueTraits> finalizerProcessor_;

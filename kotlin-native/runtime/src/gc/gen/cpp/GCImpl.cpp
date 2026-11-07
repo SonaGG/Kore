@@ -235,7 +235,6 @@ constexpr uint32_t kRememberedHoldersPerSlice = 64;
 // already (the roots, including everything the stacks may point to, are marked before any slot is traced). The
 // original's header becomes the copy's address with tag 2; the sweep frees it.
 constexpr uintptr_t kForwardedTag = 2;
-[[clang::no_destroy]] std::mutex gEvacuationAllocationMutex;
 
 ALWAYS_INLINE uintptr_t headerWord(const ObjHeader* object) noexcept {
     return __atomic_load_n(reinterpret_cast<const uintptr_t*>(object), __ATOMIC_ACQUIRE);
@@ -251,6 +250,7 @@ ObjHeader* markInPlace(MarkTraits::MarkQueue& queue, ObjHeader* value, uintptr_t
         if ((header & (gc::ObjectBits::kOld | gc::ObjectBits::kMarked)) != 0) return value;
         if (__atomic_compare_exchange_n(word, &header, header | gc::ObjectBits::kMarked, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
     }
+    alloc::nurseryKeepInPlace(value); // Kore: docs/kore/immix-nursery.md.
     // As `MarkTraits::tryEnqueue`: objects without references or extra object data need no tracing.
     auto* typeInfo = ObjHeader::untagged(reinterpret_cast<TypeInfo*>(header));
     if (typeInfo->typeInfo_ != typeInfo || typeInfo->processObjectInMark != Kotlin_processEmptyObjectInMark) queue.tryPush(*value);
@@ -275,11 +275,8 @@ NO_INLINE ObjHeader* evacuateOrMark(MarkTraits::MarkQueue& queue, ObjHeader* val
                               static_cast<size_t>(-typeInfo->instanceSize_) * value->array()->count_, kObjectAlignment)
             : AlignUp<size_t>(typeInfo->instanceSize_, kObjectAlignment);
     if (!alloc::canEvacuate(value, bytes)) return markInPlace(queue, value, header);
-    uint8_t* memory;
-    {
-        std::unique_lock guard(gEvacuationAllocationMutex);
-        memory = mm::GlobalData::Instance().allocator().allocateForEvacuation(bytes);
-    }
+    // Kore: each GC thread copies into its own evacuation allocator (no lock).
+    uint8_t* memory = mm::GlobalData::Instance().allocator().allocateForEvacuation(bytes);
     if (memory == nullptr) return markInPlace(queue, value, header);
     std::memcpy(memory, value, bytes);
     auto* copy = reinterpret_cast<ObjHeader*>(memory);
@@ -863,6 +860,8 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
     uint64_t pauseStart = konan::getTimeMicros();
     pausePhase("start");
 
+    alloc::nurseryStartCollection(/* full = */ false); // Kore: docs/kore/immix-nursery.md.
+
     // Kore: the moving young generation.
     bool nursery = alloc::nursery::enabled();
     std::vector<ObjHeader*> stackReferenced;
@@ -921,6 +920,7 @@ void gc::internal::GenerationalGC::performFullCollection(GCHandle gcHandle) noex
     gRecordNurseryHolders.store(alloc::nursery::enabled(), std::memory_order_relaxed);
     mark_.setupBeforeSTW(gcHandle);
     stopTheWorld(gcHandle, "GC stop the world: full collection");
+    alloc::nurseryStartCollection(/* full = */ true); // Kore: docs/kore/immix-nursery.md.
     alloc::nursery::retireAll();
     gcScheduler_.onGCStart();
     state_.start(gcHandle.getEpoch());
@@ -1309,6 +1309,7 @@ void gc::mark::ConcurrentMark::MarkTraits::checkEnqueue(ObjHeader* object) noexc
 }
 
 std::atomic<bool> kotlin::gc::internal::gRecordNurseryOrder = false;
+std::atomic<bool> kotlin::gc::internal::gNurseryRootPhase = false;
 
 void kotlin::gc::internal::recordNurseryOrder(ObjHeader* object) noexcept {
     if (!alloc::nursery::movable(object)) return;

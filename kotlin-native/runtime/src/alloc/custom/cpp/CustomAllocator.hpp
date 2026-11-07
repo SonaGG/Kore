@@ -50,6 +50,19 @@ public:
         return heap_;
     }
 
+    // Kore: the GC's allocator for evacuated objects (not a mutator's: it never allocates into the nursery).
+    void SetEvacuation() noexcept { evacuation_ = true; }
+
+    // Kore: records where the objects of the current nursery block end (docs/kore/immix-nursery.md).
+    void SealNursery() noexcept {
+        if (nurseryBlock_ != nullptr) nurseryBlock_->SetNurseryTop(immixCursor_);
+    }
+
+    // Kore: whether objects bumped into the current hole need their start bit (not in the nursery, see above).
+    ALWAYS_INLINE bool NeedsStartBits() const noexcept {
+        return !compiler::immixNursery() || evacuation_ || nurseryStartBits();
+    }
+
 private:
     // Kore: with `poll`, a mutator polls before taking a new page or allocating a large object (not the GC thread,
     // which evacuates with it).
@@ -80,7 +93,7 @@ private:
         uint8_t* top = immixCursor_;
         if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
             immixCursor_ = top + bytes;
-            ImmixBlock::MarkStart(top);
+            if (NeedsStartBits()) ImmixBlock::MarkStart(top);
             return top;
         }
         return AllocateInImmixSlowPath(size, poll);
@@ -108,6 +121,8 @@ private:
     size_t immixNextLine_ = 0;
     uint8_t* overflowCursor_ = nullptr;
     uint8_t* overflowLimit_ = nullptr;
+    bool evacuation_ = false;
+    ImmixBlock* nurseryBlock_ = nullptr; // Kore: the nursery block `immixCursor_` bumps through, if any.
 };
 
 } // namespace kotlin::alloc

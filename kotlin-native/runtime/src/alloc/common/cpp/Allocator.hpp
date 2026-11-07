@@ -104,6 +104,12 @@ void initCompressedRefsBase() noexcept;
 void pinObject(const ObjHeader* object) noexcept;
 // Whether the heap object `object` of `bytes` bytes may be moved: it lies in an Immix block, and is not pinned.
 bool canEvacuate(const ObjHeader* object, size_t bytes) noexcept;
+// Kore: the nursery (docs/kore/immix-nursery.md). `object` stays where it is through the young collection in progress (or
+// for good): if it is in a nursery block, the sweep must see it (its start bit). A no-op otherwise.
+void nurseryKeepInPlace(const ObjHeader* object) noexcept;
+// Kore: the nursery. With the world stopped, at the start of a collection: records where every thread's nursery block
+// ends; for a full collection, also sets the start bits of every nursery block, and makes allocation set them.
+void nurseryStartCollection(bool full) noexcept;
 // Instruct the allocator to free unused resources.
 void compactObjectPoolInCurrentThread() noexcept;
 

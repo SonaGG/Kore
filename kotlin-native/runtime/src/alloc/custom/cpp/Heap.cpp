@@ -86,6 +86,8 @@ void Heap::ForEachHeapSlot(
         }
         // Kore: a block returned to the system holds no objects (and must not be read).
         if ((chunk->decommitted & (uint32_t(1) << ((address - chunk->first) / ImmixBlock::kBlockSize))) != 0) continue;
+        // Kore: a nursery block has no start bits until something needs them (docs/kore/immix-nursery.md).
+        if (compiler::immixNursery()) ImmixBlock::Of(address)->EnsureNurseryStarts();
         uint8_t* block = ImmixBlock::Of(address)->StartAtOrBefore(address);
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();

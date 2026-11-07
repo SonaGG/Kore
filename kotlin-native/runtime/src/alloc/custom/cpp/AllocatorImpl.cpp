@@ -11,6 +11,8 @@
 #include "GCApi.hpp"
 #include "Heap.hpp"
 #include "ThreadData.hpp"
+#include "GlobalData.hpp"
+#include "ThreadRegistry.hpp"
 
 using namespace kotlin;
 
@@ -167,12 +169,31 @@ void alloc::destroyExtraObjectData(mm::ExtraObjectData& extraObject) noexcept {
 
 // Kore: the moving young generation.
 
+alloc::CustomAllocator& alloc::Allocator::Impl::evacuationAllocatorForCurrentThread() noexcept {
+    thread_local CustomAllocator* allocator = nullptr;
+    if (allocator == nullptr) {
+        auto created = std::make_unique<CustomAllocator>(heap_);
+        created->SetEvacuation();
+        allocator = created.get();
+        std::unique_lock guard(evacuationAllocatorsMutex_);
+        evacuationAllocators_.push_back(std::move(created));
+    }
+    return *allocator;
+}
+
+void alloc::Allocator::Impl::finishEvacuation() noexcept {
+    evacuationAllocator_.PrepareForGC();
+    std::unique_lock guard(evacuationAllocatorsMutex_);
+    for (auto& allocator : evacuationAllocators_) allocator->PrepareForGC();
+}
+
+// Kore: thread-safe (each GC thread has its own evacuation allocator).
 uint8_t* alloc::Allocator::allocateForEvacuation(size_t bytes) noexcept {
-    return impl_->evacuationAllocator().AllocateForEvacuation(AllocationSize::bytesAtLeast(bytes));
+    return impl_->evacuationAllocatorForCurrentThread().AllocateForEvacuation(AllocationSize::bytesAtLeast(bytes));
 }
 
 void alloc::Allocator::finishEvacuation() noexcept {
-    impl_->evacuationAllocator().PrepareForGC();
+    impl_->finishEvacuation();
 }
 
 namespace {
@@ -274,6 +295,35 @@ void alloc::pinObject(const ObjHeader* object) noexcept {
     if (!compiler::immixEvacuation() || object == nullptr || !object->heap()) return;
     if (CustomAllocator::GetAllocatedHeapSize(const_cast<ObjHeader*>(object)) > ImmixBlock::kMaxObjectBytes) return;
     ImmixBlock::Of(object)->Pin(object);
+    nurseryKeepInPlace(object);
+}
+
+void alloc::nurseryKeepInPlace(const ObjHeader* object) noexcept {
+    if (!compiler::immixNursery() || object == nullptr || !object->heap()) return;
+    auto* mutableObject = const_cast<ObjHeader*>(object);
+    if (CustomAllocator::GetAllocatedHeapSize(mutableObject) > ImmixBlock::kMaxObjectBytes) return;
+    auto* block = ImmixBlock::Of(object);
+    if (!block->Nursery()) return;
+    auto* start = mutableObject->type_info()->IsArray()
+            ? reinterpret_cast<uint8_t*>(&CustomHeapArray::from(mutableObject->array()))
+            : reinterpret_cast<uint8_t*>(&CustomHeapObject::from(mutableObject));
+    // Atomically: GC workers marking roots and mutators pinning may set other bits of the same word meanwhile.
+    if (!block->IsStart(start)) ImmixBlock::MarkStartAtomic(start);
+}
+
+void alloc::nurseryStartCollection(bool full) noexcept {
+    if (!compiler::immixNursery()) return;
+    for (auto& thread : mm::ThreadRegistry::Instance().LockForIter()) {
+        thread.allocator().impl().alloc().SealNursery();
+    }
+    if (full) {
+        gNurseryStartBits.store(true, std::memory_order_relaxed);
+        mm::GlobalData::Instance().allocator().impl().heap().immixBlocks().TraverseBlocks([](ImmixBlock* block) {
+            if (block->Nursery()) block->EnsureNurseryStarts();
+        });
+    } else {
+        gNurseryStartBits.store(false, std::memory_order_relaxed);
+    }
 }
 
 bool alloc::canEvacuate(const ObjHeader* object, size_t bytes) noexcept {
@@ -281,5 +331,7 @@ bool alloc::canEvacuate(const ObjHeader* object, size_t bytes) noexcept {
     // Only out of recycled blocks (opportunistic, as in Immix): objects in fresh blocks are contiguous already, and
     // copying every survivor costs more than it saves.
     auto* block = ImmixBlock::Of(object);
+    // Kore: with the nursery, every young object of a nursery block that may move does (docs/kore/immix-nursery.md).
+    if (compiler::immixNursery()) return block->Nursery() && !block->IsPinned(object);
     return block->Recycled() && !block->IsPinned(object);
 }

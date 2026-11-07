@@ -22,6 +22,7 @@
 #include "Utils.hpp"
 #include "concurrent/Once.hpp"
 #include "concurrent/ScopedThread.hpp"
+#include "Allocator.hpp"
 
 
 namespace kotlin::gc::internal {
@@ -29,6 +30,8 @@ namespace kotlin::gc::internal {
 // `GenerationalGC::evacuateNursery`, which copies survivors in that order, so that objects used together end up
 // together).
 extern std::atomic<bool> gRecordNurseryOrder;
+// Kore: set while a young collection with the Immix nursery marks the roots (docs/kore/immix-nursery.md).
+extern std::atomic<bool> gNurseryRootPhase;
 void recordNurseryOrder(ObjHeader* object) noexcept;
 } // namespace kotlin::gc::internal
 
@@ -108,6 +111,9 @@ public:
                 auto* typeInfo = object->typeInfoOrMetaUntagged();
                 if (typeInfo->typeInfo_ == typeInfo && typeInfo->processObjectInMark == Kotlin_processEmptyObjectInMark) {
                     bool marked = objectData.tryMark();
+                    if (marked && __builtin_expect(internal::gNurseryRootPhase.load(std::memory_order_relaxed), false)) {
+                        alloc::nurseryKeepInPlace(object);
+                    }
                     if (marked && __builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
                         internal::recordNurseryOrder(object);
                     }
@@ -116,6 +122,7 @@ public:
             }
             // Kore: whoever sets the mark bit pushes the object.
             if (!objectData.tryMark()) return false;
+            if (__builtin_expect(internal::gNurseryRootPhase.load(std::memory_order_relaxed), false)) alloc::nurseryKeepInPlace(object);
             queue.tryPush(*object);
             if (__builtin_expect(internal::gRecordNurseryOrder.load(std::memory_order_relaxed), false)) {
                 internal::recordNurseryOrder(object);

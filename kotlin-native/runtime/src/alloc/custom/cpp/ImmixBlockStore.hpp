@@ -57,6 +57,7 @@ public:
             size_t liveBytes = block->Sweep<SweepTraits>(sweepHandle, finalizerQueue);
             diff += static_cast<std::ptrdiff_t>(liveBytes) - static_cast<std::ptrdiff_t>(block->RecordedBytes());
             block->RecordedBytes() = liveBytes;
+            block->SetNursery(false);
             if (liveBytes == 0) {
                 PushFree(block);
             } else if (block->FreeLines() >= kMinFreeLinesToRecycle) {
@@ -73,6 +74,7 @@ public:
         ImmixBlock* block = recyclable_.Pop();
         if (block == nullptr) return TakeFreeBlock();
         block->SetRecycled(true);
+        block->SetNursery(false);
         used_.Push(block);
         return block;
     }
@@ -87,6 +89,7 @@ public:
             if (block == nullptr) block = NewBlock();
         }
         block->SetRecycled(false);
+        block->SetNursery(false);
         used_.Push(block);
         return block;
     }

@@ -122,8 +122,14 @@ ALWAYS_INLINE inline bool compactHeaders() noexcept {
 }
 
 // Kore: young collections copy survivors out of Immix blocks (docs/kore/gc-redesign.md, phase 5).
+// Kore: also with the nursery (everything about moving: pinning, forwarded headers).
 ALWAYS_INLINE inline bool immixEvacuation() noexcept {
     return Kotlin_immixEvacuation != 0;
+}
+
+// Kore: the copying young generation in the Immix heap (docs/kore/immix-nursery.md).
+ALWAYS_INLINE inline bool immixNursery() noexcept {
+    return Kotlin_immixEvacuation == 2;
 }
 
 // Kore: small and medium objects live in Immix blocks (alloc/custom ImmixBlock.hpp).
