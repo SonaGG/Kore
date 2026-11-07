@@ -4,6 +4,7 @@
 
 #include "KotlinPlugin.h"
 
+#include "Passes/ArrayLengthRange.h"
 #include "Passes/HideSymbols.h"
 #include "Passes/Frames.h"
 #include "Passes/LoopCallBonus.h"
@@ -11,6 +12,7 @@
 #include "Passes/ObjectScalarReplacement.h"
 #include "Passes/PrepareStackProtector.h"
 #include "Passes/PrepareThreadSanitizer.h"
+#include "Passes/RecursiveInline.h"
 #include "Passes/UncheckedFunctions.h"
 
 #include "llvm/Passes/PassBuilder.h"
@@ -154,6 +156,8 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                 [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
                   if (!passDisabled("callbonus"))
                     PM.addPass(createModuleToFunctionPassAdaptor(LoopCallBonusPass()));
+                  if (!passDisabled("lengthrange"))
+                    PM.addPass(createModuleToFunctionPassAdaptor(ArrayLengthRangePass()));
                   if (ShrinkWrapFrames)
                     PM.addPass(PendingFramesPass());
                 });
@@ -162,6 +166,9 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
             PB.registerOptimizerEarlyEPCallback(
                 [](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
                   PM.addPass(InlinePendingAllocationsPass());
+                  // Kore: after the inliner, before the loop optimizations.
+                  if (!passDisabled("recinline"))
+                    PM.addPass(RecursiveInlinePass());
                 });
             PB.registerFullLinkTimeOptimizationEarlyEPCallback(
                 [](ModulePassManager &PM, OptimizationLevel) {
