@@ -114,9 +114,102 @@ NO_INLINE size_t winAPIUnwind(size_t skipCount, std_support::span<void*> result)
     return currentSize;
 }
 
+#if defined(__x86_64__)
+// Kore: a per-thread cache of what unwinding a frame does, by return address. For a frame without a frame register
+// whose unwind codes all apply (the return address is past the prologue, as every caller's is), unwinding restores
+// some registers from fixed offsets of the stack pointer, adds a fixed amount to it, and pops the return address: the
+// entry replays that, without RtlLookupFunctionEntry (which finds the module under a lock) and RtlVirtualUnwind. Other
+// frames are unwound by the system as before. Exceptions capture their stack trace when they are created, so this is
+// most of the cost of creating one.
+struct FrameUnwind {
+    uint64_t rip = 0;
+    uint32_t stackBytes = 0; // Added to Rsp before the return address is read.
+    uint8_t restoreCount = 0;
+    uint8_t cacheable = 0;
+    uint8_t registers[8] = {}; // Rax..R15 numbering.
+    uint32_t offsets[8] = {}; // From Rsp at the frame's body.
+};
+
+constexpr size_t kFrameUnwindCacheSize = 256; // About 12 KiB of thread-local storage.
+THREAD_LOCAL_VARIABLE FrameUnwind tFrameUnwindCache[kFrameUnwindCacheSize];
+
+// Parses the unwind info of `function` for a return address `offset` bytes into it. False if it cannot be cached.
+bool parseFrameUnwind(uint64_t imageBase, const RUNTIME_FUNCTION* function, uint32_t offset, FrameUnwind& entry) noexcept {
+    uint64_t stack = 0;
+    bool primary = true;
+    while (true) {
+        auto info = reinterpret_cast<const uint8_t*>(imageBase + function->UnwindData);
+        uint8_t version = info[0] & 7;
+        uint8_t flags = info[0] >> 3;
+        uint8_t prologSize = info[1];
+        uint8_t count = info[2];
+        uint8_t frameRegister = info[3] & 0xF;
+        auto codes = reinterpret_cast<const uint16_t*>(info + 4);
+        if (version != 1 || frameRegister != 0) return false;
+        if (primary && offset < prologSize) return false;
+        for (uint8_t i = 0; i < count;) {
+            uint8_t op = (codes[i] >> 8) & 0xF;
+            uint8_t opInfo = codes[i] >> 12;
+            switch (op) {
+                case 0: // UWOP_PUSH_NONVOL
+                    if (entry.restoreCount == 8) return false;
+                    entry.registers[entry.restoreCount] = opInfo;
+                    entry.offsets[entry.restoreCount++] = static_cast<uint32_t>(stack);
+                    stack += 8;
+                    i += 1;
+                    break;
+                case 1: // UWOP_ALLOC_LARGE
+                    if (opInfo == 0) {
+                        stack += uint64_t(codes[i + 1]) * 8;
+                        i += 2;
+                    } else {
+                        stack += uint64_t(codes[i + 1]) | (uint64_t(codes[i + 2]) << 16);
+                        i += 3;
+                    }
+                    break;
+                case 2: // UWOP_ALLOC_SMALL
+                    stack += uint64_t(opInfo) * 8 + 8;
+                    i += 1;
+                    break;
+                case 4: // UWOP_SAVE_NONVOL: relative to Rsp at the body (no frame register).
+                    if (entry.restoreCount == 8) return false;
+                    entry.registers[entry.restoreCount] = opInfo;
+                    entry.offsets[entry.restoreCount++] = static_cast<uint32_t>(uint64_t(codes[i + 1]) * 8);
+                    i += 2;
+                    break;
+                case 5: // UWOP_SAVE_NONVOL_FAR
+                    if (entry.restoreCount == 8) return false;
+                    entry.registers[entry.restoreCount] = opInfo;
+                    entry.offsets[entry.restoreCount++] =
+                            static_cast<uint32_t>(uint64_t(codes[i + 1]) | (uint64_t(codes[i + 2]) << 16));
+                    i += 3;
+                    break;
+                case 6: // UWOP_SAVE_XMM (legacy)
+                case 8: // UWOP_SAVE_XMM128: no XMM register is needed to unwind.
+                    i += 2;
+                    break;
+                case 7: // UWOP_SAVE_XMM_FAR (legacy)
+                case 9: // UWOP_SAVE_XMM128_FAR
+                    i += 3;
+                    break;
+                default: // UWOP_SET_FPREG, UWOP_PUSH_MACHFRAME, unknown.
+                    return false;
+            }
+        }
+        if (!(flags & UNW_FLAG_CHAININFO)) break;
+        function = reinterpret_cast<const RUNTIME_FUNCTION*>(codes + ((count + 1) & ~1));
+        primary = false;
+    }
+    if (stack > UINT32_MAX) return false;
+    entry.stackBytes = static_cast<uint32_t>(stack);
+    return true;
+}
+#endif
+
 // Kore: the whole stack trace in one walk (`winAPIUnwind` needs two: one to count the frames, one to store them), into
 // a buffer on the stack that spills to `result` only for deep stacks. Exceptions capture their stack trace when they
-// are created, so this is most of the cost of throwing one.
+// are created, so this is most of the cost of throwing one. Frames are unwound from the per-thread cache when they can
+// be (see `FrameUnwind`).
 NO_INLINE void winAPIUnwindAll(size_t skipCount, std::vector<void*>& result) {
     void* buffer[256];
     size_t buffered = 0;
@@ -124,13 +217,47 @@ NO_INLINE void winAPIUnwindAll(size_t skipCount, std::vector<void*>& result) {
     context.ContextFlags = CONTEXT_ALL;
     RtlCaptureContext(&context);
     UNWIND_HISTORY_TABLE historyTable = {};
+#if defined(__x86_64__)
+    // The committed part of this thread's stack, from its thread information block.
+    auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
+    auto stackLow = reinterpret_cast<uintptr_t>(tib->StackLimit);
+    auto stackHigh = reinterpret_cast<uintptr_t>(tib->StackBase);
+    auto* registers = &context.Rax; // Rax..R15, in the unwind codes' numbering.
+#endif
     do {
-        DWORD64 imageBase = 0;
-        PRUNTIME_FUNCTION functionEntry = RtlLookupFunctionEntry(context.Rip, &imageBase, &historyTable);
-        if (!functionEntry) break;
-        PVOID handlerData = nullptr;
-        ULONG64 establisherFramePointers[2] = { 0, 0 };
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, functionEntry, &context, &handlerData, establisherFramePointers, nullptr);
+        bool unwound = false;
+#if defined(__x86_64__)
+        FrameUnwind& entry = tFrameUnwindCache[(context.Rip >> 2) % kFrameUnwindCacheSize];
+        if (entry.rip == context.Rip && entry.cacheable) {
+            uint64_t rsp = context.Rsp;
+            // Stay on this thread's stack: a wrong entry must not read elsewhere.
+            if (rsp >= stackLow && rsp + entry.stackBytes + 8 <= stackHigh) {
+                for (uint8_t i = 0; i < entry.restoreCount; ++i) {
+                    registers[entry.registers[i]] = *reinterpret_cast<const uint64_t*>(rsp + entry.offsets[i]);
+                }
+                rsp += entry.stackBytes;
+                context.Rip = *reinterpret_cast<const uint64_t*>(rsp);
+                context.Rsp = rsp + 8;
+                unwound = true;
+            }
+        }
+#endif
+        if (!unwound) {
+            DWORD64 imageBase = 0;
+            PRUNTIME_FUNCTION functionEntry = RtlLookupFunctionEntry(context.Rip, &imageBase, &historyTable);
+            if (!functionEntry) break;
+#if defined(__x86_64__)
+            FrameUnwind fresh;
+            fresh.rip = context.Rip;
+            fresh.cacheable = parseFrameUnwind(imageBase, functionEntry,
+                                               static_cast<uint32_t>(context.Rip - imageBase - functionEntry->BeginAddress), fresh);
+            if (!fresh.cacheable) fresh.restoreCount = 0;
+            entry = fresh;
+#endif
+            PVOID handlerData = nullptr;
+            ULONG64 establisherFramePointers[2] = { 0, 0 };
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, functionEntry, &context, &handlerData, establisherFramePointers, nullptr);
+        }
         if (skipCount > 0) {
             skipCount--;
             continue;
