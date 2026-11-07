@@ -79,10 +79,21 @@ public fun String.toIntOrNull(): Int? = toIntOrNull(radix = 10)
  */
 @SinceKotlin("1.1")
 public fun String.toIntOrNull(radix: Int): Int? {
+    val parsed = parseIntOrInvalid(radix)
+    return if (parsed == INVALID_INT_PARSE) null else parsed.toInt()
+}
+
+// Kore: `toIntOrNull` without the boxing of its result: the value, or `INVALID_INT_PARSE` (outside the Int range) for
+// a string that is not a number. `toInt` (inline) uses it directly, so parsing a number allocates nothing.
+@PublishedApi
+internal const val INVALID_INT_PARSE: Long = Long.MIN_VALUE
+
+@PublishedApi
+internal fun String.parseIntOrInvalid(radix: Int): Long {
     checkRadix(radix)
 
     val length = this.length
-    if (length == 0) return null
+    if (length == 0) return INVALID_INT_PARSE
 
     val start: Int
     val isNegative: Boolean
@@ -90,7 +101,7 @@ public fun String.toIntOrNull(radix: Int): Int? {
 
     val firstChar = this[0]
     if (firstChar < '0') {  // Possible leading sign
-        if (length == 1) return null  // non-digit (possible sign) only, no digits after
+        if (length == 1) return INVALID_INT_PARSE  // non-digit (possible sign) only, no digits after
 
         start = 1
 
@@ -101,7 +112,7 @@ public fun String.toIntOrNull(radix: Int): Int? {
             isNegative = false
             limit = -Int.MAX_VALUE
         } else
-            return null
+            return INVALID_INT_PARSE
     } else {
         start = 0
         isNegative = false
@@ -118,27 +129,27 @@ public fun String.toIntOrNull(radix: Int): Int? {
         val char = this[i]
         val digit = if (char in '0'..'9' && radix >= 10) char - '0' else digitOf(char, radix)
 
-        if (digit < 0) return null
+        if (digit < 0) return INVALID_INT_PARSE
         if (result < limitBeforeMul) {
             if (limitBeforeMul == limitForMaxRadix) {
                 limitBeforeMul = limit / radix
 
                 if (result < limitBeforeMul) {
-                    return null
+                    return INVALID_INT_PARSE
                 }
             } else {
-                return null
+                return INVALID_INT_PARSE
             }
         }
 
         result *= radix
 
-        if (result < limit + digit) return null
+        if (result < limit + digit) return INVALID_INT_PARSE
 
         result -= digit
     }
 
-    return if (isNegative) result else -result
+    return (if (isNegative) result else -result).toLong()
 }
 
 /**

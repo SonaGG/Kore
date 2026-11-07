@@ -119,7 +119,7 @@ public actual inline fun String.toShort(radix: Int): Short = toShortOrNull(radix
  * @sample samples.text.Numbers.toInt
  */
 @kotlin.internal.InlineOnly
-public actual inline fun String.toInt(): Int = toIntOrNull() ?: throw NumberFormatException()
+public actual inline fun String.toInt(): Int = toInt(10)
 
 /**
  * Parses the string as an [Int] number and returns the result.
@@ -128,7 +128,12 @@ public actual inline fun String.toInt(): Int = toIntOrNull() ?: throw NumberForm
  */
 @SinceKotlin("1.1")
 @kotlin.internal.InlineOnly
-public actual inline fun String.toInt(radix: Int): Int = toIntOrNull(radix) ?: throw NumberFormatException()
+public actual inline fun String.toInt(radix: Int): Int {
+    // Kore: without boxing (see `parseIntOrInvalid`).
+    val parsed = parseIntOrInvalid(radix)
+    if (parsed == INVALID_INT_PARSE) throw NumberFormatException()
+    return parsed.toInt()
+}
 
 /**
  * Parses the string to a [Long] number.
