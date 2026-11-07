@@ -333,7 +333,8 @@ extern "C" OBJ_GETTER(Kotlin_String_toCharArray, KConstRef string, KRef destinat
     RETURN_OBJ(destination);
 }
 
-extern "C" OBJ_GETTER(Kotlin_String_subSequence, KConstRef thiz, KInt startIndex, KInt endIndex) {
+// Kore: the general case of `Kotlin_String_subSequence` (out of line).
+static NO_INLINE OBJ_GETTER(Kotlin_String_subSequenceGeneral, KConstRef thiz, KInt startIndex, KInt endIndex) {
     return encodingAware(thiz, [=](auto thiz) {
         if (startIndex < 0 || static_cast<uint32_t>(endIndex) > thiz.sizeInChars() || startIndex > endIndex) {
             // Kotlin/JVM uses StringIndexOutOfBounds, but Native doesn't have it and this is close enough.
@@ -512,6 +513,19 @@ extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateWriteChar(KRef target, 
 
 extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateLongLength(KLong value) {
     return decimalLength(magnitudeOf(value)) + (value < 0 ? 1 : 0);
+}
+
+// Kore: a non-empty substring of a UTF-16 string, inlined into compiled code; everything else is out of line.
+extern "C" PERFORMANCE_INLINE OBJ_GETTER(Kotlin_String_subSequence, KConstRef thiz, KInt startIndex, KInt endIndex) {
+    auto header = reinterpret_cast<const StringHeader*>(thiz);
+    if (header->encoding() == StringEncoding::kUTF16 && startIndex >= 0 && startIndex < endIndex &&
+        static_cast<uint32_t>(endIndex) <= header->size() / sizeof(KChar)) {
+        auto length = static_cast<uint32_t>(endIndex - startIndex);
+        auto result = CreateUninitializedString(StringEncoding::kUTF16, length, OBJ_RESULT);
+        copyChars(templateChars(result, 0), reinterpret_cast<const KChar*>(header->data()) + startIndex, length);
+        return result;
+    }
+    RETURN_RESULT_OF(Kotlin_String_subSequenceGeneral, thiz, startIndex, endIndex);
 }
 
 static std::optional<KInt> Kotlin_String_cachedHashCode(KConstRef thiz) {
