@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include "DecimalFormat.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -426,6 +428,90 @@ extern "C" KInt Kotlin_StringBuilder_insertInt(KRef builder, KInt position, KInt
     RuntimeAssert(toArray->count_ >= static_cast<uint32_t>(11 + position), "must be true");
     // Kore: digits straight into the builder's array (always ASCII).
     return static_cast<KInt>(kotlin::formatDecimalTo(value, CharArrayAddressOfElementAt(toArray, position)));
+}
+
+
+// Kore: string templates built in place (see the compiler's `StringConcatenationPresizing`): the parts are measured, one
+// UTF-16 string of the total length is allocated, and the parts are written into it before it is used anywhere.
+namespace {
+
+ALWAYS_INLINE KChar* templateChars(KRef target, KInt position) {
+    return reinterpret_cast<KChar*>(StringHeader::of(target)->data()) + position;
+}
+
+// Copies [count] chars; short runs (most template parts) without a call into the C library.
+ALWAYS_INLINE void copyChars(KChar* out, const KChar* in, size_t count) {
+    size_t bytes = count * sizeof(KChar);
+    auto o = reinterpret_cast<uint8_t*>(out);
+    auto i = reinterpret_cast<const uint8_t*>(in);
+    if (bytes > 32) {
+        std::memcpy(o, i, bytes);
+    } else if (bytes >= 16) {
+        uint8_t head[16], tail[16];
+        __builtin_memcpy(head, i, 16);
+        __builtin_memcpy(tail, i + bytes - 16, 16);
+        __builtin_memcpy(o, head, 16);
+        __builtin_memcpy(o + bytes - 16, tail, 16);
+    } else if (bytes >= 8) {
+        uint64_t head, tail;
+        __builtin_memcpy(&head, i, 8);
+        __builtin_memcpy(&tail, i + bytes - 8, 8);
+        __builtin_memcpy(o, &head, 8);
+        __builtin_memcpy(o + bytes - 8, &tail, 8);
+    } else if (bytes >= 4) {
+        uint32_t head, tail;
+        __builtin_memcpy(&head, i, 4);
+        __builtin_memcpy(&tail, i + bytes - 4, 4);
+        __builtin_memcpy(o, &head, 4);
+        __builtin_memcpy(o + bytes - 4, &tail, 4);
+    } else if (bytes == 2) {
+        *out = *in;
+    }
+}
+
+ALWAYS_INLINE KInt decimalLength(uint64_t magnitude) {
+    KInt digits = 1;
+    while (magnitude >= 10000) { magnitude /= 10000; digits += 4; }
+    if (magnitude >= 100) { magnitude /= 100; digits += 2; }
+    if (magnitude >= 10) digits += 1;
+    return digits;
+}
+
+ALWAYS_INLINE uint64_t magnitudeOf(int64_t value) {
+    return value < 0 ? ~static_cast<uint64_t>(value) + 1 : static_cast<uint64_t>(value);
+}
+
+} // namespace
+
+extern "C" OBJ_GETTER(Kotlin_String_templateAllocate, KInt length) {
+    if (length < 0) ThrowOutOfMemoryError();
+    RETURN_RESULT_OF(CreateUninitializedString, StringEncoding::kUTF16, static_cast<uint32_t>(length));
+}
+
+extern "C" KInt Kotlin_String_templateWriteString(KRef target, KInt position, KConstRef value) {
+    KChar* out = templateChars(target, position);
+    return encodingAware(value, [=](auto string) -> KInt {
+        auto length = string.sizeInChars();
+        if constexpr (string.encoding == StringEncoding::kUTF16) {
+            copyChars(out, string.begin().ptr(), length);
+        } else {
+            std::copy_n(string.begin(), length, out);
+        }
+        return position + static_cast<KInt>(length);
+    });
+}
+
+extern "C" KInt Kotlin_String_templateWriteLong(KRef target, KInt position, KLong value) {
+    return position + static_cast<KInt>(kotlin::formatDecimalTo(value, templateChars(target, position)));
+}
+
+extern "C" KInt Kotlin_String_templateWriteChar(KRef target, KInt position, KChar value) {
+    *templateChars(target, position) = value;
+    return position + 1;
+}
+
+extern "C" KInt Kotlin_String_templateLongLength(KLong value) {
+    return decimalLength(magnitudeOf(value)) + (value < 0 ? 1 : 0);
 }
 
 static std::optional<KInt> Kotlin_String_cachedHashCode(KConstRef thiz) {

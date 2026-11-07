@@ -162,6 +162,11 @@ private object CallableIds {
     val createUninitializedInstance = "createUninitializedInstance".internalCallableId
     val createUninitializedArray = "createUninitializedArray".internalCallableId
     val createEmptyString = "createEmptyString".internalCallableId
+    val stringTemplateAllocate = "stringTemplateAllocate".internalCallableId // Kore
+    val stringTemplateWriteString = "stringTemplateWriteString".internalCallableId // Kore
+    val stringTemplateWriteLong = "stringTemplateWriteLong".internalCallableId // Kore
+    val stringTemplateWriteChar = "stringTemplateWriteChar".internalCallableId // Kore
+    val stringTemplateLongLength = "stringTemplateLongLength".internalCallableId // Kore
     val initInstance = "initInstance".internalCallableId
     val isSubtype = "isSubtype".internalCallableId
     val downcast = "downcast".internalCallableId
@@ -561,6 +566,12 @@ class BackendNativeSymbols(
     val createUninitializedArray by CallableIds.createUninitializedArray.functionSymbol()
 
     val createEmptyString by CallableIds.createEmptyString.functionSymbol()
+
+    val stringTemplateAllocate by CallableIds.stringTemplateAllocate.functionSymbol() // Kore
+    val stringTemplateWriteString by CallableIds.stringTemplateWriteString.functionSymbol() // Kore
+    val stringTemplateWriteLong by CallableIds.stringTemplateWriteLong.functionSymbol() // Kore
+    val stringTemplateWriteChar by CallableIds.stringTemplateWriteChar.functionSymbol() // Kore
+    val stringTemplateLongLength by CallableIds.stringTemplateLongLength.functionSymbol() // Kore
 
     val initInstance by CallableIds.initInstance.functionSymbol()
 

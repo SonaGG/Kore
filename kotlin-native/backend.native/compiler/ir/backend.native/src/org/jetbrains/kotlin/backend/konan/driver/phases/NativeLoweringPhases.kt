@@ -698,8 +698,8 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         forLoopsPhase,
         flattenStringConcatenationPhase,
         stringConcatenationPhase,
-        stringConcatenationPresizingPhase.takeIf { this.optimizationsEnabled },
         stringConcatenationTypeNarrowingPhase.takeIf { this.optimizationsEnabled },
+        stringConcatenationPresizingPhase.takeIf { this.optimizationsEnabled }, // Kore: sees the narrowed appends.
         defaultParameterExtentPhase,
         innerClassPhase,
         dataClassesPhase,

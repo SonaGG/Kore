@@ -251,3 +251,29 @@ internal fun executeAndRelease(actionRef: ExternalRCRef) {
     disposeExternalRCRef(actionRef)
     action()
 }
+
+// Kore: string templates built in place, see the compiler's `StringConcatenationPresizing`. The string is allocated with
+// the total length of the parts and written before it is used anywhere; each write returns the position after it.
+@UsedFromCompilerGeneratedCode
+@GCUnsafeCall("Kotlin_String_templateAllocate")
+@Escapes.Nothing
+internal external fun stringTemplateAllocate(length: Int): String
+
+@UsedFromCompilerGeneratedCode
+@GCUnsafeCall("Kotlin_String_templateWriteString")
+@Escapes.Nothing
+internal external fun stringTemplateWriteString(target: String, position: Int, value: String): Int
+
+@UsedFromCompilerGeneratedCode
+@GCUnsafeCall("Kotlin_String_templateWriteLong")
+@Escapes.Nothing
+internal external fun stringTemplateWriteLong(target: String, position: Int, value: Long): Int
+
+@UsedFromCompilerGeneratedCode
+@GCUnsafeCall("Kotlin_String_templateWriteChar")
+@Escapes.Nothing
+internal external fun stringTemplateWriteChar(target: String, position: Int, value: Char): Int
+
+@UsedFromCompilerGeneratedCode
+@GCUnsafeCall("Kotlin_String_templateLongLength")
+internal external fun stringTemplateLongLength(value: Long): Int
