@@ -16,6 +16,12 @@ import org.jetbrains.kotlin.backend.konan.lower.originalConstructor
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.expressions.*
+import org.jetbrains.kotlin.ir.types.isAny
+import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
+import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
+import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.ir.types.classOrNull
 import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.util.*
@@ -237,10 +243,45 @@ private fun inferFunctionAttributes(contextUtils: ContextUtils, irFunction: IrSi
             }
             if (mustNotInline(contextUtils.context, irFunction)) {
                 add(LlvmFunctionAttribute.NoInline)
-            } else if (isStdlibIteratorStep(irFunction)) {
+            } else if (isStdlibIteratorStep(irFunction) || isTrivialConstructor(irFunction)) {
                 add(LlvmFunctionAttribute.AlwaysInline)
             }
         }
+
+// Kore: a constructor that only stores its parameters (or constants) into fields, as those of `Pair`, data classes and
+// tree nodes. Its reference stores make LLVM's inliner see it as too large, so every `Node(l, r)` stayed a call, and the
+// new object escaped into it: inlined, the object's allocation, its field stores and their barriers are in the caller,
+// where escape analysis and scalar replacement can remove them (the barriers of a new object fold away).
+private fun isTrivialConstructor(irFunction: IrSimpleFunction): Boolean {
+    val constructor = irFunction.originalConstructor ?: return false
+    val body = irFunction.body ?: return false
+    var statements = 0
+    var trivial = true
+    body.acceptVoid(object : IrVisitorVoid() {
+        override fun visitElement(element: IrElement) {
+            when (element) {
+                is IrBlockBody, is IrComposite, is IrGetValue, is IrConst, is IrSetField, is IrReturn, is IrGetObjectValue -> {}
+                is IrBlock -> if (element is IrReturnableBlock) trivial = false
+                is IrTypeOperatorCall -> if (element.operator != IrTypeOperator.IMPLICIT_COERCION_TO_UNIT) trivial = false
+                is IrDelegatingConstructorCall -> {
+                    // Only `Any()`: other superclass constructors may do anything.
+                    if (element.symbol.owner.parentClassOrNull?.defaultType?.isAny() != true) trivial = false
+                }
+                // The lowered `Any()` call (see `ConstructorsLowering`), and the returned `Unit`.
+                is IrCall -> {
+                    val anyConstructor = element.origin == org.jetbrains.kotlin.backend.konan.lower.LOWERED_DELEGATING_CONSTRUCTOR_CALL &&
+                            element.symbol.owner.originalConstructor?.parentClassOrNull?.defaultType?.isAny() == true
+                    val unit = element.symbol.owner.name.asString() == "theUnitInstance" && element.arguments.isEmpty()
+                    if (!anyConstructor && !unit) trivial = false
+                }
+                else -> trivial = false
+            }
+            if (element is IrSetField || element is IrDelegatingConstructorCall) statements++
+            if (trivial) element.acceptChildrenVoid(this)
+        }
+    })
+    return trivial && statements in 1..16 && !constructor.parentAsClass.isValue
+}
 
 // Kore: the `hasNext`/`next` implementations of the standard library's iterators are the steps of every `for` loop over
 // a collection. Inlining them into the loops lets LLVM keep the iteration state in registers and fold the receiver's
