@@ -211,6 +211,12 @@ private val stringConcatenationPhase = createFileLoweringPhase(
         prerequisite = setOf(flattenStringConcatenationPhase, forLoopsPhase)
 )
 
+// Kore: right after the string concatenation lowering, whose builders it sizes.
+private val stringConcatenationPresizingPhase = createFileLoweringPhase(
+        { context: Context -> StringConcatenationPresizing(context) },
+        name = "StringConcatenationPresizing",
+)
+
 private val stringConcatenationTypeNarrowingPhase = createFileLoweringPhase(
         ::StringConcatenationTypeNarrowing,
         name = "StringConcatenationTypeNarrowing",
@@ -692,6 +698,7 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         forLoopsPhase,
         flattenStringConcatenationPhase,
         stringConcatenationPhase,
+        stringConcatenationPresizingPhase.takeIf { this.optimizationsEnabled },
         stringConcatenationTypeNarrowingPhase.takeIf { this.optimizationsEnabled },
         defaultParameterExtentPhase,
         innerClassPhase,
