@@ -216,10 +216,14 @@ private class DeclarationsGeneratorVisitor(override val generationState: NativeG
 
         // offsetN indicates at what offset, if any, an N-byte appropriately aligned block can be packed.
         // If no such block exists that does not overlap with a better aligned free block, offsetN will be -1.
+        // Kore: offsets from the object's start, as `createClassBody` lays the fields out: the header word takes the first
+        // 8 bytes, or only 4 with compact headers (the first 4-byte field then shares its word). The model must match the
+        // layout, or a subclass's field packed into a "hole" that the superclass's layout does not have moves the
+        // superclass's fields in the subclass (and code of the superclass then reads the wrong offsets).
         var offset1 = -1L
         var offset2 = -1L
-        var offset4 = -1L
-        var offset8 = 0L // == size of allocated fields rounded up to multiple of 8 bytes
+        var offset4 = if (llvm.compactHeaders) 4L else -1L
+        var offset8 = 8L // == size of allocated fields rounded up to multiple of 8 bytes
 
         // Allocates a block of the given size. Sizes smaller than 8 bytes will be rounded up to a power of 2 and
         // aligned according to that size. Other sizes will be rounded up to a multiple of 8 and will be 8 byte aligned.
@@ -251,7 +255,9 @@ private class DeclarationsGeneratorVisitor(override val generationState: NativeG
 
         val packedFields = mutableListOf<IndexedField>()
         for (field in fields) {
-            val size = LLVMStoreSizeOfType(llvm.runtime.targetData, field.type.toLLVMType(llvm))
+            // Kore: reference fields are 4 bytes with compressed references (as `createClassBody` lays them out).
+            val size = if (llvm.compressedRefs && field.type.binaryTypeIsReference()) 4L
+                    else LLVMStoreSizeOfType(llvm.runtime.targetData, field.type.toLLVMType(llvm))
             check(size == 1L || size == 2L || size == 4L || size % 8 == 0L)
             check(min(size, 8L) % field.alignment == 0L)
             val offset = nextOffset(size)
