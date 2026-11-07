@@ -5,6 +5,7 @@
 #include "KotlinPlugin.h"
 
 #include "Passes/ArrayLengthRange.h"
+#include "Passes/SmallArrayPromotion.h"
 #include "Passes/HideSymbols.h"
 #include "Passes/Frames.h"
 #include "Passes/LoopCallBonus.h"
@@ -136,6 +137,10 @@ PassPluginLibraryInfo getKotlinPluginInfo() {
                   // still calls.
                   if (!passDisabled("osr"))
                     PM.addPass(ObjectScalarReplacementPass());
+                  // Kore: then small primitive arrays left on the stack go to
+                  // registers (before the vectorizers).
+                  if (!passDisabled("smallarrays"))
+                    PM.addPass(SmallArrayPromotionPass());
                   // Drop the checks of `@Unchecked` functions (before IRCE,
                   // which then has fewer checks to split loops for).
                   PM.addPass(UncheckedFunctionsPass());
