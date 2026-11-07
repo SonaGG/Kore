@@ -1338,6 +1338,13 @@ internal abstract class FunctionGenerationContext(
 
     /** Kore: the type info or meta object the header of `objPtr` points to (without the tag and GC bits). */
     fun loadTypeInfoOrMeta(objPtr: LLVMValueRef): LLVMValueRef {
+        if (context.config.compactHeaders) {
+            // Kore: the 4 bytes of the compact header only. A word-sized load would also read the first field, and right
+            // after a 4-byte store to it (e.g. a state machine updating its object), the store could not be forwarded to
+            // the load, which then waits for the store to retire.
+            val low = load(llvm.int32Type, objPtr, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingUnordered, alignment = 4)
+            return intToPtr(and(zext(low, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)
+        }
         val header = load(llvm.pointerType, objPtr, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingUnordered,
                 alignment = LLVMABIAlignmentOfType(codegen.llvmTargetData, llvm.pointerType))
         return intToPtr(and(ptrToInt(header, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)

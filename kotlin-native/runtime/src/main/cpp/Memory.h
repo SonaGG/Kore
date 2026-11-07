@@ -80,7 +80,18 @@ struct ObjHeader {
 
   TypeInfo* typeInfoOrMetaRelaxed() const { return kotlin::std_support::atomic_ref{typeInfoOrMeta_}.load(std::memory_order_relaxed);}
   // Kore: null for an object that is not constructed yet.
-  TypeInfo* typeInfoOrMetaUntagged() const { return untagged(typeInfoOrMetaRelaxed()); }
+  TypeInfo* typeInfoOrMetaUntagged() const {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+      // Kore: with compact headers, the 4 bytes of the header only: a word-sized load would also read the field in the
+      // high half, and could not take a recent 4-byte store to that field from the store buffer (the load then waits for
+      // the store to retire). As the compiled code does (see `CodeGenerator.loadTypeInfoOrMeta`).
+      if (kotlin::compiler::compactHeaders()) {
+          uint32_t low = __atomic_load_n(reinterpret_cast<const uint32_t*>(&typeInfoOrMeta_), __ATOMIC_RELAXED);
+          return untagged(reinterpret_cast<TypeInfo*>(static_cast<uintptr_t>(low)));
+      }
+#endif
+      return untagged(typeInfoOrMetaRelaxed());
+  }
   TypeInfo* typeInfoOrMetaAcquire() const { return kotlin::std_support::atomic_ref{typeInfoOrMeta_}.load(std::memory_order_acquire);}
 
   /**
@@ -96,7 +107,7 @@ struct ObjHeader {
    * Hardware guaranties on many supported platforms doesn't allow this to happen.
    */
   const TypeInfo* type_info() const {
-      auto atomicTypeInfoPtr = kotlin::std_support::atomic_ref{untagged(typeInfoOrMetaRelaxed())->typeInfo_};
+      auto atomicTypeInfoPtr = kotlin::std_support::atomic_ref{typeInfoOrMetaUntagged()->typeInfo_};
       const TypeInfo* typeInfo = atomicTypeInfoPtr.load(std::memory_order_relaxed);
       RuntimeAssert(typeInfo != nullptr, "TypeInfo ptr in object %p in null", this);
       return typeInfo;
