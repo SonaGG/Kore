@@ -51,7 +51,9 @@ using MarkTraits = gc::mark::ConcurrentMark::MarkTraits;
 // Allocation volume between young collections when `gcYoungGenerationSize` is not set.
 // Kore: 16 MiB: young collections stay cheap and in cache, and objects promoted then dropped pile up less between full
 // collections (64 MiB kept about 40% more memory resident, at no gain in throughput).
-constexpr int64_t kDefaultYoungGenerationBytes = 16 * 1024 * 1024;
+// Kore: 8 MiB: about 8 MiB less memory than 16 for programs that allocate many short-lived objects, at the same speed
+// (a young generation that grows with the alive bytes, see `HeapGrowthController`, covers programs that keep much).
+constexpr int64_t kDefaultYoungGenerationBytes = 8 * 1024 * 1024;
 
 ALWAYS_INLINE gc::internal::RememberedSet& currentRememberedSet() noexcept {
     return mm::ThreadRegistry::Instance().CurrentThreadData()->gc().impl().rememberedSet();
