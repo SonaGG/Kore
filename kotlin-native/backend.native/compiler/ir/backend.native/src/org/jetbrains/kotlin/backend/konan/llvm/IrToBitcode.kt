@@ -783,7 +783,7 @@ internal class CodeGeneratorVisitor(
         }
 
         // Kore: see `UncheckedFunctionsPass` (the loop polls are left out by [loopSafePoint]).
-        if (declaration.isKoreUnchecked)
+        if (declaration.isKoreUnchecked || !context.config.safetyChecks)
             codegen.llvmFunction(declaration).addStringAttribute("kore-unchecked")
 
         if (context.shouldVerifyBitCode())
@@ -1223,6 +1223,8 @@ internal class CodeGeneratorVisitor(
     private fun loopSafePoint() {
         // Kore: `@kore.annotations.Unchecked` functions do not poll in loops.
         if (context.shouldOptimize() && (currentCodeContext.functionScope() as? FunctionScope)?.declaration?.dropsLoopPolls == true) return
+        // Kore: `-Xbinary=loopSafepoints=false`.
+        if (context.shouldOptimize() && !context.config.loopSafepoints) return
         val poll = call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
         LLVMAddCallSiteAttribute(poll, LLVMAttributeFunctionIndex,
                 createLlvmEnumAttribute(LLVMGetTypeContext(LLVMTypeOf(poll))!!, LlvmFunctionAttribute.NoInline.asAttributeKindId()))

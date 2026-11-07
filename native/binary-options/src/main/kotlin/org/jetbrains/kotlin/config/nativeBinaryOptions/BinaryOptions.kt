@@ -94,6 +94,14 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: type-based alias analysis metadata on field accesses.
     val tbaa by booleanOption()
 
+    // Kore: `false` removes array index and null checks from the whole program in optimized builds, as if every function
+    // were annotated with `@kore.annotations.Unchecked` (an out-of-bounds access is then undefined behavior).
+    val safetyChecks by booleanOption()
+
+    // Kore: `false` removes the safepoint polls of loops from the whole program in optimized builds. A long loop then
+    // delays garbage collections (and other threads waiting for them) until it ends: for single-threaded programs.
+    val loopSafepoints by booleanOption()
+
     // Kore: store the fields of small immutable classes inline in the objects holding them (default: true).
     val valueFlattening by booleanOption()
 

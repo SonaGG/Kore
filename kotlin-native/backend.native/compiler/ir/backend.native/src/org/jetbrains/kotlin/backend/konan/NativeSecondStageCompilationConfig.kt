@@ -301,6 +301,13 @@ class NativeSecondStageCompilationConfig(
     val tbaa: Boolean
         get() = configuration.get(BinaryOptions.tbaa) ?: true
 
+    // Kore: see [BinaryOptions.safetyChecks] and [BinaryOptions.loopSafepoints].
+    val safetyChecks: Boolean
+        get() = configuration.get(BinaryOptions.safetyChecks) ?: true
+
+    val loopSafepoints: Boolean
+        get() = configuration.get(BinaryOptions.loopSafepoints) ?: true
+
     // Kore: see [org.jetbrains.kotlin.backend.konan.optimizations.ValueFlattening]. Needs the whole program.
     val valueFlattening: Boolean
         get() = configuration.get(BinaryOptions.valueFlattening) ?: true
