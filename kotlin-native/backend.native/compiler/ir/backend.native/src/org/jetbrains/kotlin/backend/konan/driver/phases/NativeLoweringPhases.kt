@@ -26,6 +26,7 @@ import org.jetbrains.kotlin.backend.konan.lower.*
 import org.jetbrains.kotlin.backend.konan.lower.InitializersLowering
 import org.jetbrains.kotlin.backend.konan.optimizations.NativeForLoopsLowering
 import org.jetbrains.kotlin.backend.konan.optimizations.ReductionUnrollAndJam
+import org.jetbrains.kotlin.backend.konan.optimizations.BoundsCheckVersioning
 import org.jetbrains.kotlin.config.phaser.NamedCompilerPhase
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrFile
@@ -183,6 +184,13 @@ private val contractsDslRemovePhase = createFileLoweringPhase(
 private val reductionUnrollAndJamPhase = createFileLoweringPhase(
         { context: Context -> ReductionUnrollAndJam(context) },
         name = "ReductionUnrollAndJam",
+        prerequisite = setOf(functionsWithoutBoundCheck)
+)
+
+// Kore: after the unroll-and-jam (whose loops are already unchecked), before the for loops are lowered.
+private val boundsCheckVersioningPhase = createFileLoweringPhase(
+        { context: Context -> BoundsCheckVersioning(context) },
+        name = "BoundsCheckVersioning",
         prerequisite = setOf(functionsWithoutBoundCheck)
 )
 
@@ -680,6 +688,7 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         primitiveCompareValuesPhase, // Kore: after the types are restored.
         primitiveVariableNarrowingPhase, // Kore: likewise.
         reductionUnrollAndJamPhase.takeIf { this.optimizationsEnabled },
+        boundsCheckVersioningPhase.takeIf { this.optimizationsEnabled },
         forLoopsPhase,
         flattenStringConcatenationPhase,
         stringConcatenationPhase,
