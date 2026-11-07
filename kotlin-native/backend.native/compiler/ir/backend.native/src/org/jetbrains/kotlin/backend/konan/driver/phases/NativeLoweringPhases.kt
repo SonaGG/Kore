@@ -25,6 +25,7 @@ import org.jetbrains.kotlin.backend.konan.ir.FunctionsWithoutBoundCheckGenerator
 import org.jetbrains.kotlin.backend.konan.lower.*
 import org.jetbrains.kotlin.backend.konan.lower.InitializersLowering
 import org.jetbrains.kotlin.backend.konan.optimizations.NativeForLoopsLowering
+import org.jetbrains.kotlin.backend.konan.optimizations.SequenceLoopFusion
 import org.jetbrains.kotlin.backend.konan.optimizations.ReductionUnrollAndJam
 import org.jetbrains.kotlin.backend.konan.optimizations.BoundsCheckVersioning
 import org.jetbrains.kotlin.config.phaser.NamedCompilerPhase
@@ -188,6 +189,12 @@ private val reductionUnrollAndJamPhase = createFileLoweringPhase(
 )
 
 // Kore: after the unroll-and-jam (whose loops are already unchecked), before the for loops are lowered.
+// Kore: before the lambdas become classes (see `SequenceLoopFusion`).
+private val sequenceLoopFusionPhase = createFileLoweringPhase(
+        { context: Context -> SequenceLoopFusion(context) },
+        name = "SequenceLoopFusion",
+)
+
 private val boundsCheckVersioningPhase = createFileLoweringPhase(
         { context: Context -> BoundsCheckVersioning(context) },
         name = "BoundsCheckVersioning",
@@ -672,6 +679,7 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         removeExpectDeclarationsPhase,
         stripTypeAliasDeclarationsPhase,
         assertionRemoverPhase,
+        sequenceLoopFusionPhase.takeIf { this.optimizationsEnabled },
         volatilePhase,
         delegatedPropertyOptimizationPhase,
         propertyReferencePhase,
