@@ -66,7 +66,15 @@ void Kotlin_Uuid_getRandomBytes(KRef byteArray, KInt size) {
         }
     }
 #elif KONAN_WINDOWS
-    NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)address, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    // Kore: bcrypt.dll is loaded on first use instead of at startup (it and the DLLs it pulls in cost about half a
+    // millisecond of every program's start).
+    using GenRandom = NTSTATUS(WINAPI*)(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
+    static const GenRandom genRandom = [] {
+        HMODULE module = LoadLibraryW(L"bcrypt.dll");
+        return module == nullptr ? nullptr : reinterpret_cast<GenRandom>(reinterpret_cast<void*>(GetProcAddress(module, "BCryptGenRandom")));
+    }();
+    if (genRandom == nullptr) throwReadingRandomBytesFailed("Unexpected failure in random bytes generation: bcrypt.dll is unavailable");
+    NTSTATUS status = genRandom(NULL, (PUCHAR)address, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     if (!NT_SUCCESS(status)) {
         throwReadingRandomBytesFailed("Unexpected failure in random bytes generation: %ld", status);
     }
