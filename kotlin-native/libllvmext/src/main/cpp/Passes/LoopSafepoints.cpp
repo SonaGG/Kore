@@ -244,6 +244,92 @@ static bool stripMine(Loop &L, CallBase *Poll, uint64_t Chunk) {
     Phi->setIncomingValue(Index, OuterPhi);
   }
 
+  // Kore: when the latch compares an induction variable stepping by one with a
+  // loop-invariant bound (`iv + 1 < n`), the chunk compares it with
+  // `min(n, iv + Chunk)` instead (computed once per chunk, saturating): one
+  // comparison per iteration instead of the condition and a chunk counter.
+  if (LatchBr->isConditional()) {
+    if (auto *Cmp = dyn_cast<ICmpInst>(LatchBr->getCondition())) {
+      // Normalize to "continue while X <pred> Bound".
+      ICmpInst::Predicate Pred =
+          ContinueOnTrue ? Cmp->getPredicate() : Cmp->getInversePredicate();
+      Value *X = Cmp->getOperand(0);
+      Value *Bound = Cmp->getOperand(1);
+      if (!L.isLoopInvariant(Bound)) {
+        std::swap(X, Bound);
+        Pred = ICmpInst::getSwappedPredicate(Pred);
+      }
+      // X is a header phi, or that phi plus one, and the phi's latch value is
+      // that phi plus one.
+      auto plusOne = [](Value *V, PHINode *&Base) {
+        auto *Add = dyn_cast<BinaryOperator>(V);
+        if (!Add || Add->getOpcode() != Instruction::Add)
+          return false;
+        auto *One = dyn_cast<ConstantInt>(Add->getOperand(1));
+        Base = dyn_cast<PHINode>(Add->getOperand(0));
+        return One && One->isOne() && Base;
+      };
+      // X may be a truncation of the (widened) induction variable.
+      Value *XBase = X;
+      if (auto *Trunc = dyn_cast<TruncInst>(X))
+        XBase = Trunc->getOperand(0);
+      PHINode *IV = dyn_cast<PHINode>(XBase);
+      bool XIsNext = false;
+      if (!IV) {
+        XIsNext = plusOne(XBase, IV);
+        if (!XIsNext)
+          IV = nullptr;
+      }
+      PHINode *StepBase = nullptr;
+      bool Signed = Pred == ICmpInst::ICMP_SLT;
+      bool Unsigned = Pred == ICmpInst::ICMP_ULT;
+      if (IV && IV->getParent() == Header && (Signed || Unsigned) &&
+          L.isLoopInvariant(Bound) && XBase->getType()->isIntegerTy() &&
+          plusOne(IV->getIncomingValueForBlock(Latch), StepBase) &&
+          StepBase == IV && (!isa<Instruction>(Bound) ||
+                             !L.contains(cast<Instruction>(Bound)))) {
+        PHINode *OuterIV = nullptr;
+        for (auto [Phi, OuterPhi] : Phis)
+          if (Phi == IV)
+            OuterIV = OuterPhi;
+        if (OuterIV) {
+          IRBuilder<> OB(Outer->getTerminator());
+          Type *Ty = X->getType();
+          Value *X0 = XIsNext ? OB.CreateAdd(OuterIV, ConstantInt::get(OuterIV->getType(), 1))
+                              : static_cast<Value *>(OuterIV);
+          X0 = OB.CreateTrunc(X0, Ty);
+          Value *Limit = OB.CreateBinaryIntrinsic(
+              Signed ? Intrinsic::sadd_sat : Intrinsic::uadd_sat, X0,
+              ConstantInt::get(Ty, Chunk));
+          Value *ChunkBound = OB.CreateBinaryIntrinsic(
+              Signed ? Intrinsic::smin : Intrinsic::umin, Bound, Limit,
+              nullptr, "chunk.bound");
+          IRBuilder<> LB(LatchBr);
+          Value *Continue = LB.CreateICmp(Pred, X, ChunkBound, "chunk.more");
+          Value *Cond = LatchBr->getCondition();
+          if (ContinueOnTrue) {
+            LatchBr->setCondition(Continue);
+            LatchBr->setSuccessor(1, Chunked);
+            BranchInst::Create(PollBlock, Exit, Cond, Chunked);
+          } else {
+            LatchBr->setCondition(LB.CreateNot(Continue));
+            LatchBr->setSuccessor(0, Chunked);
+            BranchInst::Create(Exit, PollBlock, Cond, Chunked);
+          }
+          for (PHINode &Phi : Exit->phis()) {
+            int Index = Phi.getBasicBlockIndex(Latch);
+            if (Index >= 0)
+              Phi.setIncomingBlock(Index, Chunked);
+          }
+          BranchInst::Create(Outer, PollBlock);
+          Poll->moveBefore(PollBlock->getTerminator()->getIterator());
+          inlinePoll(Poll);
+          return true;
+        }
+      }
+    }
+  }
+
   // The iteration count in the chunk.
   Type *CounterTy = Type::getInt32Ty(Ctx);
   PHINode *Counter = PHINode::Create(CounterTy, 2, "chunk.iter");
