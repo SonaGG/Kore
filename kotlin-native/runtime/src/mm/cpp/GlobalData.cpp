@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "ConditionVariable.hpp"
 #include "GlobalData.hpp"
 
 #include <condition_variable>
@@ -103,7 +104,7 @@ void mm::waitGlobalDataInitialized() noexcept {
         RuntimeAssert(initializingThread != std::this_thread::get_id(), "A thread that initialized global data cannot be waiting for its initialization");
     }
     std::unique_lock guard{globalDataInitMutex};
-    globalDataInitCV.wait(guard, []() noexcept {
+    waitRobustly(globalDataInitCV, guard, []() noexcept {
             return globalDataInitState.load(std::memory_order_relaxed) == InitState::kInitialized;
             });
 }

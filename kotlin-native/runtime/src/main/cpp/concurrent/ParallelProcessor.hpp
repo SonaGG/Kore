@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "ConditionVariable.hpp"
 #include "CompilerConstants.hpp"
 #include "KAssert.h"
 #include "Logging.hpp"
@@ -258,7 +259,7 @@ public:
                 return false;
             }
 
-            this->dispatcher_.waitCV_.wait(lock);
+            waitOnceRobustly(this->dispatcher_.waitCV_, lock); // Kore: see `waitOnceRobustly`.
             this->dispatcher_.waitingWorkers_.fetch_sub(1, std::memory_order_relaxed);
             if (this->dispatcher_.allDone_) {
                 return false;

@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "ConditionVariable.hpp"
 #include "ThreadData.hpp"
 #include "ThreadSuspension.hpp"
 
@@ -89,7 +90,7 @@ NO_EXTERNAL_CALLS_CHECK void kotlin::mm::ThreadSuspensionData::suspendIfRequeste
 
         threadData_.gc().OnSuspendForGC();
         std::unique_lock lock(gSuspensionRequestMutex);
-        gSuspensionCondVar.wait(lock, []() { return !IsThreadSuspensionRequested(); });
+        waitRobustly(gSuspensionCondVar, lock, []() { return !IsThreadSuspensionRequested(); });
 
         // Must return to running state under the lock.
         pauseHandle.resume();
@@ -114,7 +115,7 @@ void kotlin::mm::RequestThreadsSuspension(internal::SuspensionReason reason) noe
 
     while (!TryRequestThreadsSuspension(reason)) {
         std::unique_lock lock(gSuspensionRequestMutex);
-        gSuspensionCondVar.wait(lock, []() { return !IsThreadSuspensionRequested(); });
+        waitRobustly(gSuspensionCondVar, lock, []() { return !IsThreadSuspensionRequested(); });
     }
 }
 

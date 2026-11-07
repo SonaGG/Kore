@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "ConditionVariable.hpp"
 #include "MutatorAssists.hpp"
 
 #include "CallsChecker.hpp"
@@ -21,7 +22,7 @@ void gcScheduler::internal::MutatorAssists::ThreadData::safePoint() noexcept {
     {
         std::unique_lock guard(owner_.m_);
         RuntimeLogDebug({kTagGC}, "Thread is assisting for epoch %" PRId64, epoch);
-        owner_.cv_.wait(guard, noNeedToWait);
+        waitRobustly(owner_.cv_, guard, noNeedToWait);
         RuntimeLogDebug({kTagGC}, "Thread has assisted for epoch %" PRId64, epoch);
     }
     startedWaiting_.store(epoch * 2 + 1, std::memory_order_release);

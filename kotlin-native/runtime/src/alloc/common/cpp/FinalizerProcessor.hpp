@@ -11,6 +11,7 @@
 #include <mutex>
 #include <utility>
 
+#include "ConditionVariable.hpp"
 #include "KAssert.h"
 #include "Memory.h"
 #include "Runtime.h"
@@ -42,7 +43,7 @@ public:
             epochDoneCallback_(epoch);
             return;
         }
-        finalizerQueueCondVar_.wait(guard, [this] { return newTasksAllowed_; });
+        waitRobustly(finalizerQueueCondVar_, guard, [this] { return newTasksAllowed_; });
         StartFinalizerThreadIfNone();
         FinalizerQueueTraits::add(finalizerQueue_, std::move(tasks));
         finalizerQueueEpoch_ = epoch;
@@ -89,7 +90,7 @@ public:
 
     void WaitFinalizerThreadInitialized() noexcept {
         std::unique_lock guard(initializedMutex_);
-        initializedCondVar_.wait(guard, [this] { return initialized_; });
+        waitRobustly(initializedCondVar_, guard, [this] { return initialized_; });
     }
 
 private:
@@ -179,7 +180,7 @@ private:
             int64_t finishedEpoch = 0;
             while (true) {
                 std::unique_lock lock(owner_.finalizerQueueMutex_);
-                owner_.finalizerQueueCondVar_.wait(
+                waitRobustly(owner_.finalizerQueueCondVar_,
                         lock, [this, &finishedEpoch] { return owner_.hasNewTasks(finishedEpoch) || owner_.shutdownFlag_; });
                 if (!owner_.hasNewTasks(finishedEpoch)) {
                     RuntimeAssert(owner_.shutdownFlag_, "Nothing to do, but no shutdownFlag_ is set on wakeup");

@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include "ConditionVariable.hpp"
 #include "ConcurrentMark.hpp"
 #include "ProcessBarrier.hpp"
 
@@ -157,7 +158,7 @@ void gc::mark::ConcurrentMark::helperBody() noexcept {
         std::function<void()> task;
         {
             std::unique_lock lock(helpersMutex_);
-            helpersStart_.wait(lock, [&] { return helpersShutdown_ || helpersRound_ != seenRound; });
+            waitRobustly(helpersStart_, lock, [&] { return helpersShutdown_ || helpersRound_ != seenRound; });
             if (helpersShutdown_) return;
             seenRound = helpersRound_;
             task = helpersTask_;
@@ -188,7 +189,7 @@ void gc::mark::ConcurrentMark::startHelpers(std::function<void()> task) noexcept
 
 void gc::mark::ConcurrentMark::waitHelpers() noexcept {
     std::unique_lock lock(helpersMutex_);
-    helpersDone_.wait(lock, [&] { return helpersRunning_ == 0; });
+    waitRobustly(helpersDone_, lock, [&] { return helpersRunning_ == 0; });
     helpersTask_ = nullptr;
 }
 

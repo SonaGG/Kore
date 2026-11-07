@@ -12,6 +12,7 @@
 #include <mutex>
 #include <shared_mutex>
 
+#include "ConditionVariable.hpp"
 #include "concurrent/UtilityThread.hpp"
 #include "Utils.hpp"
 
@@ -49,7 +50,7 @@ public:
     // May lock until the context is created by the worker thread.
     Context& context() const noexcept {
         std::shared_lock guard(contextMutex_);
-        contextCV_.wait(guard, [this] { return context_ != nullptr; });
+        waitRobustly(contextCV_, guard, [this] { return context_ != nullptr; });
         return *context_;
     }
 
@@ -84,7 +85,7 @@ private:
             std::packaged_task<void()> task;
             {
                 std::unique_lock guard(workMutex_);
-                workCV_.wait(guard, [this] { return !queue_.empty() || shutdownRequested_; });
+                waitRobustly(workCV_, guard, [this] { return !queue_.empty() || shutdownRequested_; });
                 if (shutdownRequested_) {
                     return;
                 }

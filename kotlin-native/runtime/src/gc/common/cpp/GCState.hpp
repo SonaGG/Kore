@@ -10,6 +10,7 @@
 #include <atomic>
 #include <optional>
 
+#include "ConditionVariable.hpp"
 #include "CallsChecker.hpp"
 #include "KAssert.h"
 #include "Utils.hpp"
@@ -79,7 +80,7 @@ private:
         template <class Predicate>
         const T& wait(Predicate stop_waiting) {
             std::unique_lock lock(mutex_);
-            cond_.wait(lock, stop_waiting);
+            kotlin::waitRobustly(cond_, lock, stop_waiting);
             return value_;
         }
 
