@@ -88,7 +88,7 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Immix and no GC word only.
     val immixEvacuation by booleanOption()
 
-    // Kore: a copying young generation in the Immix heap (docs/kore/immix-nursery.md): mutators allocate into whole free
+    // Kore: a copying young generation in the Immix heap (docs/kore/immix-nursery.md, on by default): mutators allocate into whole free
     // blocks, and young collections copy the survivors out of them (with compressed references and compact headers).
     val immixNursery by booleanOption()
 

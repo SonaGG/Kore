@@ -1,6 +1,6 @@
 # Kore: a copying young generation in the Immix heap
 
-Status: in progress, opt-in (`-Xbinary=immixNursery=true`). Runtime and compiler options only: klib format and ABI do
+Status: on by default where supported (generational GC, Immix, no GC word); `-Xbinary=immixNursery=false` turns it off. Runtime and compiler options only: klib format and ABI do
 not change.
 
 ## Why
