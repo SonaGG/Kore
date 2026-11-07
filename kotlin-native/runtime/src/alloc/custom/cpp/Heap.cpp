@@ -57,10 +57,16 @@ void Heap::PrepareForYoungGC() noexcept {
 // Kore: debugging (`KORE_GC_PAUSES`): the addresses of the last `ForEachHeapSlot` that needed the page ranges.
 size_t gLastSlowHeapSlots = 0;
 size_t gLastHeapRanges = 0;
+// Kore: debugging (`KORE_GC_PAUSES`): nursery blocks parsed for their object starts, the objects in them, and the
+// addresses looked up, since the last report.
+std::atomic<size_t> gNurseryParses = 0;
+std::atomic<size_t> gNurseryParsedObjects = 0;
+std::atomic<size_t> gHeapSlotLookups = 0;
 
 void Heap::ForEachHeapSlot(
         const std::vector<ObjHeader**>& allSlots, const std::function<void(ObjHeader**, ObjHeader*)>& process) noexcept {
     if (allSlots.empty()) return;
+    gHeapSlotLookups.fetch_add(allSlots.size(), std::memory_order_relaxed);
     gLastSlowHeapSlots = 0;
     gLastHeapRanges = 0;
 
@@ -87,7 +93,7 @@ void Heap::ForEachHeapSlot(
         // Kore: a block returned to the system holds no objects (and must not be read).
         if ((chunk->decommitted & (uint32_t(1) << ((address - chunk->first) / ImmixBlock::kBlockSize))) != 0) continue;
         // Kore: a nursery block has no start bits until something needs them (docs/kore/immix-nursery.md).
-        if (compiler::immixNursery()) ImmixBlock::Of(address)->EnsureNurseryStarts();
+        if (compiler::immixNursery()) ImmixBlock::Of(address)->EnsureNurseryStartsUpTo(address);
         uint8_t* block = ImmixBlock::Of(address)->StartAtOrBefore(address);
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();

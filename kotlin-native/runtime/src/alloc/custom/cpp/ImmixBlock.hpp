@@ -122,6 +122,7 @@ public:
         nursery_ = nursery;
         nurseryTop_ = static_cast<uint32_t>(FirstLine() * kLineSize);
         nurseryStartsBuilt_.store(false, std::memory_order_relaxed);
+        nurseryStartsParsed_.store(0, std::memory_order_relaxed);
     }
     // Where the objects of a nursery block end (they are laid out back to back from `Begin()`).
     void SetNurseryTop(const uint8_t* top) noexcept {
@@ -129,6 +130,11 @@ public:
     }
     // Sets the start bits of all the objects of a nursery block, once (the world is stopped).
     void EnsureNurseryStarts() noexcept;
+    // Kore: sets the start bits of the objects of a nursery block up to the one containing `address` at least (parsing
+    // resumes where the last call stopped), enough for `StartAtOrBefore(address)`. Objects above stay without start bits
+    // until a later call needs them: the ones kept in place get theirs anyway (`alloc::nurseryKeepInPlace`), the
+    // others are dead (or copied out) for the sweep.
+    void EnsureNurseryStartsUpTo(const void* address) noexcept;
 
     // Whether the free memory of the block is known to be zeroed (the block was never allocated into).
     bool Zeroed() const noexcept { return zeroed_; }
@@ -209,6 +215,7 @@ private:
     bool recycled_ = false;
     bool nursery_ = false;
     std::atomic<bool> nurseryStartsBuilt_ = false;
+    std::atomic<uint32_t> nurseryStartsParsed_ = 0; // Kore: where parsing resumes (from the block), 0: at `Begin()`.
     uint32_t nurseryTop_ = 0;
     uint8_t lines_[kLineCount];
     uint64_t starts_[kStartWords];

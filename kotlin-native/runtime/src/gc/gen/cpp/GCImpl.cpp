@@ -38,6 +38,9 @@ namespace kotlin::alloc {
 // Kore: debugging counters of the custom allocator's `Heap::ForEachHeapSlot` (zero with the other allocators).
 extern size_t gLastSlowHeapSlots;
 extern size_t gLastHeapRanges;
+extern std::atomic<size_t> gNurseryParses;
+extern std::atomic<size_t> gNurseryParsedObjects;
+extern std::atomic<size_t> gHeapSlotLookups;
 } // namespace kotlin::alloc
 
 std::atomic<bool> gc::internal::youngCollection = false;
@@ -832,6 +835,9 @@ void gc::internal::GenerationalGC::markRememberedSet(
     });
     gc::pausePhase("slots");
     if (reportCounts) {
+        konan::consoleErrorf("[kore-gc] lookups: %zu addresses, %zu nursery blocks parsed (%zu objects)\n",
+                             alloc::gHeapSlotLookups.exchange(0), alloc::gNurseryParses.exchange(0),
+                             alloc::gNurseryParsedObjects.exchange(0));
         konan::consoleErrorf("[kore-gc] slots: %zu addresses, %zu needed page ranges (%zu ranges)\n", addresses.size(),
                              alloc::gLastSlowHeapSlots, alloc::gLastHeapRanges);
         std::vector<std::pair<size_t, const TypeInfo*>> types;

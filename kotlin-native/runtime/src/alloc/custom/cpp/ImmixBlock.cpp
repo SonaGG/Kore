@@ -3,6 +3,7 @@
  * that can be found in the license/LICENSE.txt file.
  */
 
+#include <atomic>
 #include "ImmixBlock.hpp"
 
 #include <cstdlib>
@@ -12,6 +13,11 @@
 #include <new>
 
 using namespace kotlin;
+
+namespace kotlin::alloc {
+extern std::atomic<size_t> gNurseryParses;
+extern std::atomic<size_t> gNurseryParsedObjects;
+} // namespace kotlin::alloc
 
 alloc::ImmixBlock* alloc::ImmixBlock::Create(void* memory) noexcept {
     RuntimeAssert(reinterpret_cast<uintptr_t>(memory) % kBlockSize == 0, "Immix block at %p is not aligned", memory);
@@ -46,19 +52,49 @@ uint8_t* alloc::ImmixBlock::StartAtOrBefore(const void* address) noexcept {
 }
 
 void alloc::ImmixBlock::EnsureNurseryStarts() noexcept {
+    EnsureNurseryStartsUpTo(reinterpret_cast<uint8_t*>(this) + kBlockSize - 1);
+}
+
+void alloc::ImmixBlock::EnsureNurseryStartsUpTo(const void* address) noexcept {
     if (!nursery_ || nurseryStartsBuilt_.load(std::memory_order_acquire)) return;
+    auto* base = reinterpret_cast<uint8_t*>(this);
+    auto offset = static_cast<uint32_t>(reinterpret_cast<const uint8_t*>(address) - base);
+    if (nurseryStartsParsed_.load(std::memory_order_acquire) > offset) return;
     static std::mutex mutex;
     std::unique_lock guard(mutex);
-    if (nurseryStartsBuilt_.load(std::memory_order_relaxed)) return;
-    auto* base = reinterpret_cast<uint8_t*>(this);
+    if (nurseryStartsBuilt_.load(std::memory_order_relaxed) || nurseryStartsParsed_.load(std::memory_order_relaxed) > offset) return;
     uint8_t* end = base + nurseryTop_;
-    for (uint8_t* element = Begin(); element < end;) {
+    uint32_t resume = nurseryStartsParsed_.load(std::memory_order_relaxed);
+    uint8_t* element = resume == 0 ? Begin() : base + resume;
+    // The start bits of a word are set together, atomically: GC workers may set other bits of it meanwhile (objects
+    // they keep in place).
+    size_t parsed = 0;
+    size_t word = SIZE_MAX;
+    uint64_t bits = 0;
+    auto flush = [&] {
+        if (bits != 0) __atomic_fetch_or(&starts_[word], bits, __ATOMIC_RELAXED);
+        bits = 0;
+    };
+    while (element < end && element <= reinterpret_cast<const uint8_t*>(address)) {
         // A zero word: nothing was allocated from here on (cannot happen below the top, but stay safe).
-        if (*reinterpret_cast<const uintptr_t*>(element) == 0) break;
-        MarkStart(element);
+        if (*reinterpret_cast<const uintptr_t*>(element) == 0) {
+            element = end;
+            break;
+        }
+        size_t granule = static_cast<size_t>(element - base) / kGranule;
+        if (granule / 64 != word) {
+            flush();
+            word = granule / 64;
+        }
+        bits |= uint64_t(1) << (granule % 64);
         element += nurseryElementBytes(element);
+        ++parsed;
     }
-    nurseryStartsBuilt_.store(true, std::memory_order_release);
+    flush();
+    gNurseryParses.fetch_add(1, std::memory_order_relaxed);
+    gNurseryParsedObjects.fetch_add(parsed, std::memory_order_relaxed);
+    nurseryStartsParsed_.store(static_cast<uint32_t>(element - base), std::memory_order_release);
+    if (element >= end) nurseryStartsBuilt_.store(true, std::memory_order_release);
 }
 
 bool alloc::immixCheck() noexcept {

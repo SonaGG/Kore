@@ -3,6 +3,7 @@
  * that can be found in the LICENSE file.
  */
 
+#include <atomic>
 #include "AllocatorImpl.hpp"
 
 #include <algorithm>
@@ -229,4 +230,7 @@ namespace kotlin::alloc {
 // Debugging counters of the custom allocator's heap slot lookups (see the generational GC).
 size_t gLastSlowHeapSlots = 0;
 size_t gLastHeapRanges = 0;
+std::atomic<size_t> gNurseryParses = 0;
+std::atomic<size_t> gNurseryParsedObjects = 0;
+std::atomic<size_t> gHeapSlotLookups = 0;
 } // namespace kotlin::alloc
