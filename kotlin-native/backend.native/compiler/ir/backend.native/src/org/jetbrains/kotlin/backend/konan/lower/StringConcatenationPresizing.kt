@@ -9,11 +9,13 @@ import org.jetbrains.kotlin.backend.common.FileLoweringPass
 import org.jetbrains.kotlin.backend.common.lower.createIrBuilder
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.*
+import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstructorCallImpl
 import org.jetbrains.kotlin.ir.types.classOrNull
@@ -22,9 +24,11 @@ import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.deepCopyWithSymbols
 import org.jetbrains.kotlin.ir.util.functions
 import org.jetbrains.kotlin.ir.util.properties
+import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 
 /**
  * Kore: string templates, as built by the string concatenation lowering
@@ -70,6 +74,42 @@ internal class StringConcatenationPresizing(private val context: Context) : File
                 transform(expression, functions.lastOrNull())
             }
         })
+        // `a + x` of a string and a primitive (`a.plusImpl(x.toString())` after the type narrowing): built in place too.
+        if (context.config.latin1Strings) return
+        irFile.transformChildrenVoid(object : IrElementTransformerVoid() {
+            override fun visitFunction(declaration: IrFunction): IrStatement {
+                functions.add(declaration)
+                declaration.transformChildrenVoid(this)
+                functions.removeAt(functions.lastIndex)
+                return declaration
+            }
+            override fun visitCall(expression: IrCall): IrExpression {
+                expression.transformChildrenVoid(this)
+                val function = functions.lastOrNull() ?: return expression
+                if (expression.symbol.owner.name.asString() != "plusImpl" || expression.arguments.size != 2) return expression
+                val left = expression.arguments[0] ?: return expression
+                val right = expression.arguments[1] ?: return expression
+                if (left.type.classOrNull != irBuiltIns.stringClass || left.type.isMarkedNullable()) return expression
+                val primitive = primitiveToString(right) ?: return expression
+                val block = IrBlockImpl(expression.startOffset, expression.endOffset, irBuiltIns.stringType)
+                buildInPlace(block, function, listOf(Part(left, Kind.STRING), primitive))
+                return block
+            }
+        })
+    }
+
+    // `x.toString()` of a non-null Int, Long or Char: `x`.
+    private fun primitiveToString(argument: IrExpression): Part? {
+        if (argument !is IrCall || argument.symbol.owner.name.asString() != "toString" || argument.arguments.size != 1) return null
+        val receiver = argument.arguments[0] ?: return null
+        if (receiver.type.isMarkedNullable()) return null
+        val owner = argument.symbol.owner.parent
+        return when {
+            owner == irBuiltIns.intClass.owner && receiver.type.classOrNull == irBuiltIns.intClass -> Part(receiver, Kind.INT)
+            owner == irBuiltIns.longClass.owner && receiver.type.classOrNull == irBuiltIns.longClass -> Part(receiver, Kind.LONG)
+            owner == irBuiltIns.charClass.owner && receiver.type.classOrNull == irBuiltIns.charClass -> Part(receiver, Kind.CHAR)
+            else -> null
+        }
     }
 
     private fun estimate(argument: IrExpression): Int {
@@ -102,17 +142,7 @@ internal class StringConcatenationPresizing(private val context: Context) : File
     // `x.toString()` of an Int, Long or Char (as the type narrowing writes appended primitives): `x` itself.
     private fun part(append: IrCall, argument: IrExpression): Part? {
         val kind = kindOf(append, argument) ?: return null
-        if (kind == Kind.STRING && argument is IrCall && argument.symbol.owner.name.asString() == "toString" && argument.arguments.size == 1) {
-            val receiver = argument.arguments[0]
-            val owner = argument.symbol.owner.parent
-            if (receiver != null && !receiver.type.isMarkedNullable()) {
-                when {
-                    owner == irBuiltIns.intClass.owner && receiver.type.classOrNull == irBuiltIns.intClass -> return Part(receiver, Kind.INT)
-                    owner == irBuiltIns.longClass.owner && receiver.type.classOrNull == irBuiltIns.longClass -> return Part(receiver, Kind.LONG)
-                    owner == irBuiltIns.charClass.owner && receiver.type.classOrNull == irBuiltIns.charClass -> return Part(receiver, Kind.CHAR)
-                }
-            }
-        }
+        if (kind == Kind.STRING) primitiveToString(argument)?.let { return it }
         return Part(argument, kind)
     }
 
