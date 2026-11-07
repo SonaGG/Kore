@@ -80,8 +80,10 @@ public actual class HashMap<K, V> private constructor(
     private var keysArray: Array<K>,
     // values in insert order, allocated only when actually used, always null in pure HashSet
     private var valuesArray: Array<V>?,
-    // hash of a key by its index, -1 if a key at that index was removed
-    private var presenceArray: IntArray,
+    // Kore: two ints per index, interleaved (one allocation, adjacent in memory): at 2 * index the hash slot of the key at
+    // that index, -1 if it was removed; at 2 * index + 1 its hash code, compared before the key itself (as JVM and other
+    // hash tables do): a probe of another key then does not touch that key, and rehashing does not call hashCode again.
+    private var entryInts: IntArray,
     // (index + 1) of a key by its hash, 0 if there is no key with that hash
     private var hashArray: IntArray,
     // max length of a collision chain
@@ -100,10 +102,6 @@ public actual class HashMap<K, V> private constructor(
     // bits of the product.
     private var hashMultiplier: Int = 1
     private var hashLeftShift: Int = hashShift
-
-    // Kore: the hash code of the key at each index, compared before the keys themselves (as JVM and other hash tables
-    // do): a probe of another key then does not touch that key, and rehashing does not call hashCode again.
-    private var keyHashes: IntArray = if (keysArray.isEmpty()) EMPTY_INTS else IntArray(keysArray.size)
 
     /**
      * The number of times this map is structurally modified.
@@ -159,7 +157,7 @@ public actual class HashMap<K, V> private constructor(
     public actual constructor(initialCapacity: Int) : this(
         arrayOfUninitializedElements(initialCapacity),
         null,
-        IntArray(initialCapacity),
+        IntArray(2 * initialCapacity),
         IntArray(computeHashSize(initialCapacity)),
         INITIAL_MAX_PROBE_DISTANCE,
         0
@@ -238,10 +236,10 @@ public actual class HashMap<K, V> private constructor(
         checkIsMutable()
         // O(length) implementation for hashArray cleanup
         for (i in 0..length - 1) {
-            val hash = presenceArray[i]
+            val hash = entryInts[2 * i]
             if (hash >= 0) {
                 hashArray[hash] = 0
-                presenceArray[i] = TOMBSTONE
+                entryInts[2 * i] = TOMBSTONE
             }
         }
         keysArray.resetRange(0, length)
@@ -347,8 +345,7 @@ public actual class HashMap<K, V> private constructor(
             })
             keysArray = keysArray.copyOfUninitializedElements(newSize)
             valuesArray = valuesArray?.copyOfUninitializedElements(newSize)
-            presenceArray = presenceArray.copyOf(newSize)
-            keyHashes = keyHashes.copyOf(newSize)
+            entryInts = entryInts.copyOf(2 * newSize)
             val newHashSize = computeHashSize(newSize)
             if (newHashSize > hashSize) rehash(newHashSize)
         }
@@ -398,13 +395,13 @@ public actual class HashMap<K, V> private constructor(
         var j = 0
         val valuesArray = valuesArray
         while (i < length) {
-            val hash = presenceArray[i]
+            val hash = entryInts[2 * i]
             if (hash >= 0) {
                 keysArray[j] = keysArray[i]
-                keyHashes[j] = keyHashes[i]
+                entryInts[2 * j + 1] = entryInts[2 * i + 1]
                 if (valuesArray != null) valuesArray[j] = valuesArray[i]
                 if (updateHashArray) {
-                    presenceArray[j] = hash
+                    entryInts[2 * j] = hash
                     hashArray[hash] = j + 1
                 }
                 j++
@@ -437,13 +434,13 @@ public actual class HashMap<K, V> private constructor(
 
     // There always is a free slot: the hash array is larger than the capacity. Raises maxProbeDistance as needed.
     private fun putRehash(i: Int) {
-        var hash = slotOf(keyHashes[i])
+        var hash = slotOf(entryInts[2 * i + 1])
         var probeDistance = 0
         while (true) {
             val index = hashArray[hash]
             if (index == 0) {
                 hashArray[hash] = i + 1
-                presenceArray[i] = hash
+                entryInts[2 * i] = hash
                 if (probeDistance > maxProbeDistance) maxProbeDistance = probeDistance
                 return
             }
@@ -459,7 +456,7 @@ public actual class HashMap<K, V> private constructor(
         while (true) {
             val index = hashArray[hash]
             if (index == 0) return TOMBSTONE
-            if (keyHashes[index - 1] == hashCode && keysEqual(key, keysArray[index - 1])) return index - 1
+            if (entryInts[2 * (index - 1) + 1] == hashCode && keysEqual(key, keysArray[index - 1])) return index - 1
             if (--probesLeft < 0) return TOMBSTONE
             if (hash-- == 0) hash = hashSize - 1
         }
@@ -468,7 +465,7 @@ public actual class HashMap<K, V> private constructor(
     private fun findValue(value: V): Int {
         var i = length
         while (--i >= 0) {
-            if (presenceArray[i] >= 0 && valuesArray!![i] == value)
+            if (entryInts[2 * i] >= 0 && valuesArray!![i] == value)
                 return i
         }
         return TOMBSTONE
@@ -493,15 +490,15 @@ public actual class HashMap<K, V> private constructor(
                     }
                     val putIndex = length++
                     keysArray[putIndex] = key
-                    keyHashes[putIndex] = hashCode
-                    presenceArray[putIndex] = hash
+                    entryInts[2 * putIndex + 1] = hashCode
+                    entryInts[2 * putIndex] = hash
                     hashArray[hash] = putIndex + 1
                     _size++
                     registerModification()
                     if (probeDistance > maxProbeDistance) maxProbeDistance = probeDistance
                     return putIndex
                 }
-                if (keyHashes[index - 1] == hashCode && keysEqual(key, keysArray[index - 1])) {
+                if (entryInts[2 * (index - 1) + 1] == hashCode && keysEqual(key, keysArray[index - 1])) {
                     return -index
                 }
                 if (++probeDistance > tentativeMaxProbeDistance) {
@@ -531,8 +528,8 @@ public actual class HashMap<K, V> private constructor(
     private fun removeEntryAt(index: Int) {
         keysArray.resetAt(index)
         valuesArray?.resetAt(index)
-        removeHashAt(presenceArray[index])
-        presenceArray[index] = TOMBSTONE
+        removeHashAt(entryInts[2 * index])
+        entryInts[2 * index] = TOMBSTONE
         _size--
         registerModification()
     }
@@ -554,7 +551,7 @@ public actual class HashMap<K, V> private constructor(
                 hashArray[hole] = 0
                 return
             }
-            val otherHash = slotOf(keyHashes[index - 1])
+            val otherHash = slotOf(entryInts[2 * (index - 1) + 1])
             // Bad case:
             //   - <--- [hash] ------ [hole] ------ [otherHash] ---> +
             //             \------------/
@@ -562,7 +559,7 @@ public actual class HashMap<K, V> private constructor(
             if ((otherHash - hash) and (hashSize - 1) >= probeDistance) {
                 // move otherHash into the hole, move the hole
                 hashArray[hole] = index
-                presenceArray[index - 1] = hole
+                entryInts[2 * (index - 1)] = hole
                 hole = hash
                 probeDistance = 0
             }
@@ -696,7 +693,7 @@ public actual class HashMap<K, V> private constructor(
         }
 
         internal fun initNext() {
-            while (index < map.length && map.presenceArray[index] < 0)
+            while (index < map.length && map.entryInts[2 * index] < 0)
                 index++
         }
 
