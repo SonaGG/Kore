@@ -19,6 +19,9 @@
 #include <cstdlib>
 #include <limits>
 #include <string.h>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include <string>
 #include <optional>
 
@@ -648,3 +651,38 @@ std::string kotlin::to_string(KConstRef kstring, size_t start, size_t size) noex
 template std::string kotlin::to_string<KStringConversionMode::CHECKED>(KConstRef, size_t, size_t);
 template std::string kotlin::to_string<KStringConversionMode::UNCHECKED>(KConstRef, size_t, size_t) noexcept;
 template std::string kotlin::to_string<KStringConversionMode::REPLACE_INVALID>(KConstRef, size_t, size_t) noexcept;
+
+// Kore: the chars `start` until `end` of a String as bytes, a char above 0xFF becoming '?' (0x3F) (Base64 decoding, see
+// `Base64.platformCharsToBytes`). A Latin-1 string is copied as it is; a UTF-16 one narrowed 8 chars at a time.
+extern "C" OBJ_GETTER(Kotlin_String_narrowToBytes, KConstRef thiz, KInt start, KInt end) {
+    auto* header = StringHeader::of(thiz);
+    size_t count = static_cast<size_t>(end - start);
+    ArrayHeader* result = AllocArrayInstance(theByteArrayTypeInfo, static_cast<int32_t>(count), OBJ_RESULT)->array();
+    auto* out = reinterpret_cast<uint8_t*>(ByteArrayAddressOfElementAt(result, 0));
+    if (header->encoding() == StringEncoding::kLatin1) {
+        std::memcpy(out, header->data() + start, count);
+        RETURN_OBJ(result->obj());
+    }
+    auto* in = reinterpret_cast<const KChar*>(header->data()) + start;
+    size_t i = 0;
+#if defined(__SSE2__)
+    const __m128i zero = _mm_setzero_si128();
+    const __m128i question = _mm_set1_epi16(0x3F);
+    for (; i + 8 <= count; i += 8) {
+        __m128i chars = _mm_loadu_si128(reinterpret_cast<const __m128i*>(in + i));
+        // The chars whose high byte is not zero become '?'.
+        __m128i wide = _mm_cmpeq_epi16(_mm_srli_epi16(chars, 8), zero);
+        __m128i narrowable = _mm_or_si128(_mm_and_si128(wide, chars), _mm_andnot_si128(wide, question));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(out + i), _mm_packus_epi16(narrowable, narrowable));
+    }
+#endif
+    for (; i < count; ++i) out[i] = in[i] <= 0xFF ? static_cast<uint8_t>(in[i]) : 0x3F;
+    RETURN_OBJ(result->obj());
+}
+
+// Kore: an ASCII ByteArray as a String (Base64 encoding, see `Base64.platformEncodeToString`): Latin-1 or widened, in one
+// pass, without an intermediate CharArray.
+extern "C" OBJ_GETTER(Kotlin_ByteArray_asciiToString, KConstRef thiz) {
+    const ArrayHeader* array = thiz->array();
+    RETURN_RESULT_OF(CreateStringFromAscii, reinterpret_cast<const char*>(ByteArrayAddressOfElementAt(array, 0)), array->count_);
+}
