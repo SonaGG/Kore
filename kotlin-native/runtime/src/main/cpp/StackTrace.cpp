@@ -91,9 +91,10 @@ NO_INLINE size_t winAPIUnwind(size_t skipCount, std_support::span<void*> result)
     CONTEXT context = {};
     context.ContextFlags = CONTEXT_ALL;
     RtlCaptureContext (&context);
+    // Kore: one history table for the whole walk (it caches function table lookups for the frames still to come).
+    UNWIND_HISTORY_TABLE historyTable = {};
     do {
         DWORD64 imageBase = 0;
-        UNWIND_HISTORY_TABLE historyTable = {};
         PRUNTIME_FUNCTION FunctionEntry = RtlLookupFunctionEntry (context.Rip, &imageBase, &historyTable);
         if (!FunctionEntry)
             break;
@@ -111,6 +112,36 @@ NO_INLINE size_t winAPIUnwind(size_t skipCount, std_support::span<void*> result)
     } while (context.Rip != 0 && (currentSize < resultSize || !doStoreIPs));
 
     return currentSize;
+}
+
+// Kore: the whole stack trace in one walk (`winAPIUnwind` needs two: one to count the frames, one to store them), into
+// a buffer on the stack that spills to `result` only for deep stacks. Exceptions capture their stack trace when they
+// are created, so this is most of the cost of throwing one.
+NO_INLINE void winAPIUnwindAll(size_t skipCount, std::vector<void*>& result) {
+    void* buffer[256];
+    size_t buffered = 0;
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_ALL;
+    RtlCaptureContext(&context);
+    UNWIND_HISTORY_TABLE historyTable = {};
+    do {
+        DWORD64 imageBase = 0;
+        PRUNTIME_FUNCTION functionEntry = RtlLookupFunctionEntry(context.Rip, &imageBase, &historyTable);
+        if (!functionEntry) break;
+        PVOID handlerData = nullptr;
+        ULONG64 establisherFramePointers[2] = { 0, 0 };
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, functionEntry, &context, &handlerData, establisherFramePointers, nullptr);
+        if (skipCount > 0) {
+            skipCount--;
+            continue;
+        }
+        if (buffered == sizeof(buffer) / sizeof(buffer[0])) {
+            result.insert(result.end(), buffer, buffer + buffered);
+            buffered = 0;
+        }
+        buffer[buffered++] = reinterpret_cast<void*>(context.Rip);
+    } while (context.Rip != 0);
+    result.insert(result.end(), buffer, buffer + buffered);
 }
 #endif
 
@@ -141,11 +172,7 @@ NO_INLINE std::vector<void*> kotlin::internal::GetCurrentStackTrace(size_t skipF
 
     return result;
 #elif USE_WINAPI_UNWIND
-    size_t depth = winAPIUnwind(kSkipFrames, std_support::span<void*>());
-    if (depth <= 0) return {};
-    result.resize(depth);
-
-    winAPIUnwind(kSkipFrames, std_support::span<void*>(result.data(), result.size()));
+    winAPIUnwindAll(kSkipFrames, result);
     return result;
 #else
     // Take into account this function and StackTrace::current.
