@@ -245,10 +245,14 @@ internal class Monomorphization(private val context: Context, private val module
     // A constructor of [irClass] that only calls its superclass's constructor (as its primary one does), without
     // initializing its fields, for its copies.
     private fun noInitConstructor(irClass: IrClass): IrConstructor? = noInitConstructors.getOrPut(irClass) {
-        val primary = irClass.primaryConstructor ?: return@getOrPut null
-        val superCall = (primary.body as? IrBlockBody)?.statements?.firstNotNullOfOrNull { it as? IrDelegatingConstructorCall }
-                ?: return@getOrPut null
-        if (superCall.arguments.any { it != null && it !is IrConst }) return@getOrPut null
+        // Kore: the primary constructor's superclass call, or (classes with only secondary constructors, e.g. ArrayDeque)
+        // a secondary constructor's, if it calls the superclass (not `this(...)`) with constant arguments.
+        val constructors = listOfNotNull(irClass.primaryConstructor) + irClass.constructors.filter { !it.isPrimary && !it.isNoInitConstructor() }
+        val superCall = constructors.firstNotNullOfOrNull { constructor ->
+            (constructor.body as? IrBlockBody)?.statements?.firstNotNullOfOrNull { it as? IrDelegatingConstructorCall }?.takeIf { call ->
+                call.symbol.owner.parentAsClass != irClass && call.arguments.all { it == null || it is IrConst }
+            }
+        } ?: return@getOrPut null
         irClass.addConstructor {
             visibility = DescriptorVisibilities.PUBLIC
             origin = IrDeclarationOrigin.DEFINED
@@ -343,6 +347,12 @@ internal class Monomorphization(private val context: Context, private val module
                     expression.type = expression.type.mapped()
                     return expression
                 }
+                // `x!!` of a primitive Array: of the primitive array.
+                if (callee.symbol == irBuiltIns.checkNotNullSymbol) {
+                    expression.typeArguments[0] = expression.typeArguments[0]?.mapped()
+                    expression.type = expression.type.mapped()
+                    return expression
+                }
                 if (expression.arguments.any { it?.type?.primitiveArrayOrNull() != null } || expression.type.primitiveArrayOrNull() != null)
                     throw Abort("call of ${callee.name} with a primitive Array")
                 return expression
@@ -359,8 +369,12 @@ internal class Monomorphization(private val context: Context, private val module
             override fun visitTypeOperator(expression: IrTypeOperatorCall): IrExpression {
                 expression.transformChildrenVoid(this)
                 if (expression.typeOperand.primitiveArrayOrNull() != null) {
-                    // Implicit casts between the same array types are fine; others are not mapped.
-                    if (expression.operator != IrTypeOperator.IMPLICIT_CAST) throw Abort("type operator on a primitive Array")
+                    // Implicit casts and not-null assertions between the same array types are fine. Checked casts are not
+                    // mapped: the value may come from code that is not specialized (an `Array`, not a primitive array).
+                    when (expression.operator) {
+                        IrTypeOperator.IMPLICIT_CAST, IrTypeOperator.IMPLICIT_NOTNULL -> {}
+                        else -> throw Abort("type operator ${expression.operator} on a primitive Array")
+                    }
                     expression.typeOperand = expression.typeOperand.mapped()
                     expression.argument = retypeCreation(expression.argument, expression.typeOperand.classOrFail)
                 }
