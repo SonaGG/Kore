@@ -29,6 +29,10 @@ import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.ir.irAttribute
+
+/** Kore: a class or function copied by [Monomorphization] (already specialized: see `GenericSpecialization`). */
+internal var IrDeclaration.isMonomorphizedCopy: Boolean? by irAttribute(copyByDefault = false)
 
 /**
  * Kore: monomorphization of generic classes (and the generic functions they call) for primitive type arguments, like
@@ -172,6 +176,7 @@ internal class Monomorphization(private val context: Context, private val module
         copy.name = Name.identifier(irClass.name.asString() + suffix(arguments))
         copy.modality = Modality.FINAL
         copyRoots += copy
+        copy.isMonomorphizedCopy = true
         copy.annotations = emptyList()
         // First the arrays (the original is not changed until this succeeds).
         mapPrimitiveArrays(copy)

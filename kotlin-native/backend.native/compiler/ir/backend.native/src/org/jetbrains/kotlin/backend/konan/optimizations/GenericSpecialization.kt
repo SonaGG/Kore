@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.optimizations
 
+import org.jetbrains.kotlin.backend.konan.lower.isMonomorphizedCopy
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.common.lower.createIrBuilder
 import org.jetbrains.kotlin.descriptors.ClassKind
@@ -54,6 +55,11 @@ internal class GenericSpecialization(private val context: Context, private val m
         val sites = mutableListOf<Pair<IrCall, Request>>()
         module.acceptVoid(object : IrVisitorVoid() {
             override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+
+            // Kore: copies made by monomorphization are specialized already; their calls stay as they are.
+            override fun visitClass(declaration: IrClass) {
+                if (declaration.isMonomorphizedCopy != true) super.visitClass(declaration)
+            }
 
             override fun visitCall(expression: IrCall) {
                 expression.acceptChildrenVoid(this)
