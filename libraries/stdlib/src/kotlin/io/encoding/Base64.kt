@@ -418,6 +418,12 @@ public open class Base64 private constructor(
         var sourceIndex = startIndex
         var destinationIndex = destinationOffset
         val groupsPerLine = if (isMimeScheme) mimeGroupsPerLine else Int.MAX_VALUE
+        // Kore: whole blocks natively where the platform can (no line breaks to insert).
+        if (!isMimeScheme) {
+            val encoded = base64EncodeBlocks(source, sourceIndex, endIndex, destination, destinationIndex, isUrlSafe)
+            sourceIndex += encoded
+            destinationIndex += encoded / bytesPerGroup * symbolsPerGroup
+        }
 
         while (sourceIndex + 2 < endIndex) {
             val groups = minOf((endIndex - sourceIndex) / bytesPerGroup, groupsPerLine)
@@ -505,6 +511,10 @@ public open class Base64 private constructor(
         var sourceIndex = startIndex
         var destinationIndex = destinationOffset
         var hasPadding = false
+        // Kore: whole blocks of symbols natively where the platform can, up to the first other symbol.
+        val decoded = base64DecodeBlocks(source, sourceIndex, endIndex, destination, destinationIndex, isUrlSafe)
+        sourceIndex += decoded
+        destinationIndex += decoded / symbolsPerGroup * bytesPerGroup
 
         while (sourceIndex < endIndex) {
             if (byteStart == -bitsPerByte && sourceIndex + 3 < endIndex) {
@@ -845,3 +855,13 @@ internal expect fun Base64.platformEncodeToByteArray(
     startIndex: Int,
     endIndex: Int
 ): ByteArray
+
+// Kore: whole groups of bytes encoded (or symbols of the alphabet decoded) by the platform, for example with SIMD
+// instructions; returns the number of source bytes (or symbols) done, 0 where the platform has no such implementation.
+internal expect fun base64EncodeBlocks(
+    source: ByteArray, startIndex: Int, endIndex: Int, destination: ByteArray, destinationOffset: Int, urlSafe: Boolean
+): Int
+
+internal expect fun base64DecodeBlocks(
+    source: ByteArray, startIndex: Int, endIndex: Int, destination: ByteArray, destinationOffset: Int, urlSafe: Boolean
+): Int

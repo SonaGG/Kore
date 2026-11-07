@@ -20,3 +20,17 @@ internal actual external fun narrowStringToBytes(string: String, startIndex: Int
 @GCUnsafeCall("Kotlin_ByteArray_asciiToString")
 @Escapes.Nothing
 internal actual external fun asciiBytesToString(bytes: ByteArray): String
+
+/** Kore: see `base64EncodeBlocks` (SSSE3 on x86-64). */
+@GCUnsafeCall("Kotlin_Base64_encodeBlocks")
+@Escapes.Nothing
+internal actual external fun base64EncodeBlocks(
+    source: ByteArray, startIndex: Int, endIndex: Int, destination: ByteArray, destinationOffset: Int, urlSafe: Boolean
+): Int
+
+/** Kore: see `base64DecodeBlocks` (SSSE3 on x86-64). */
+@GCUnsafeCall("Kotlin_Base64_decodeBlocks")
+@Escapes.Nothing
+internal actual external fun base64DecodeBlocks(
+    source: ByteArray, startIndex: Int, endIndex: Int, destination: ByteArray, destinationOffset: Int, urlSafe: Boolean
+): Int
