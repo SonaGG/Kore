@@ -34,14 +34,22 @@ PreservedAnalyses ArrayLengthRangePass::run(Function &F,
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       auto *Load = dyn_cast<LoadInst>(&I);
-      if (!Load || !Load->getType()->isIntegerTy(32) ||
-          Load->hasMetadata(LLVMContext::MD_range) ||
+      if (!Load || !Load->getType()->isIntegerTy(32) || Load->isVolatile() ||
+          !Load->isUnordered() ||
           !isArrayLengthAccess(Load->getMetadata(LLVMContext::MD_tbaa)))
         continue;
       if (!Range)
         Range = MDBuilder(F.getContext())
                     .createRange(APInt(32, 0), APInt(32, 0x80000000u));
-      Load->setMetadata(LLVMContext::MD_range, Range);
+      if (!Load->hasMetadata(LLVMContext::MD_range))
+        Load->setMetadata(LLVMContext::MD_range, Range);
+      // Kore: an array's length never changes while code holds a reference to
+      // the array, so its load can be hoisted out of loops even past calls
+      // (such as safepoint polls): then IRCE removes the bounds checks of the
+      // loop and the vectorizer can work on it.
+      if (!Load->hasMetadata(LLVMContext::MD_invariant_load))
+        Load->setMetadata(LLVMContext::MD_invariant_load,
+                          MDNode::get(F.getContext(), {}));
       Changed = true;
     }
   }
