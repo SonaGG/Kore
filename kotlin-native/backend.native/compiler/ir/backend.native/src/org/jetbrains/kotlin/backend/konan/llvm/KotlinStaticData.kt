@@ -47,6 +47,16 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
         }
     }
 
+    // Kore: the runtime wraps string flags into a struct (`StringFlags`), see KString.h.
+    private fun stringFlags(flags: Short): ConstValue {
+        val flagsType = LLVMStructGetTypeAtIndex(runtime.stringHeaderType, 3)!!
+        return if (LLVMGetTypeKind(flagsType) == LLVMTypeKind.LLVMStructTypeKind) {
+            Struct(flagsType, llvm.constInt16(flags))
+        } else {
+            llvm.constInt16(flags)
+        }
+    }
+
     // Kore: compressed references (docs/kore/gc-redesign.md, phase 3). References in permanent objects are offsets from a base
     // known at run time only: they are emitted as 0 and written at startup from these (slot, object) pairs.
     val compressedRefFixups = mutableListOf<Pair<ConstPointer, ConstValue>>()
@@ -94,7 +104,7 @@ internal class KotlinStaticData(override val generationState: NativeGenerationSt
                 arrayLength(runtime.stringHeaderType, (runtime.stringHeaderExtraSize + data.size) / 2), // array size in Chars
                 llvm.constInt32(hashCode),
                 // flags = HASHCODE_IS_ZERO or IGNORE_LAST_BYTE or (encoding shl ENCODING_OFFSET)
-                llvm.constInt16(((if (hashCode == 0) 1 else 0) or (2 * (encoded.size % 2)) or (encodingFlag shl 12)).toShort()),
+                stringFlags(((if (hashCode == 0) 1 else 0) or (2 * (encoded.size % 2)) or (encodingFlag shl 12)).toShort()),
                 ConstArray(llvm.int8Type, data.map(llvm::constInt8))
         )
         return createConstant(header)

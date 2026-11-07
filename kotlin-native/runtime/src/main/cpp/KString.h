@@ -25,6 +25,23 @@ enum class StringEncoding : uint8_t {
 // In order to avoid allocating a separate object for the data array, all other fields are packed
 // into it at the beginning, so a String's ObjHeader is also an ArrayHeader, and the space taken
 // up by other fields is counted in its length.
+// Kore: the flags of a string are read through their own type, so that type-based alias analysis can tell them from
+// other 16-bit values: the optimizer marks their loads invariant (see `ArrayLengthRangePass`), which keeps the encoding
+// checks of string accessors out of loops. Only `HASHCODE_IS_ZERO` changes after the string is created (atomically,
+// through `bits()`): a stale read of it just computes the same hash code again.
+enum class StringFlagsRep : uint16_t {};
+struct StringFlags {
+    StringFlagsRep value_;
+    ALWAYS_INLINE operator uint16_t() const noexcept { return static_cast<uint16_t>(value_); }
+    ALWAYS_INLINE StringFlags& operator=(uint16_t value) noexcept {
+        value_ = static_cast<StringFlagsRep>(value);
+        return *this;
+    }
+    ALWAYS_INLINE uint16_t& bits() noexcept { return *reinterpret_cast<uint16_t*>(&value_); }
+    ALWAYS_INLINE const uint16_t& bits() const noexcept { return *reinterpret_cast<const uint16_t*>(&value_); }
+};
+static_assert(sizeof(StringFlags) == sizeof(uint16_t));
+
 struct StringHeader {
     ARRAY_HEADER_FIELDS
     int32_t hashCode_; // if ArrayHeader has padding, this will go into it instead of the array's data
@@ -32,7 +49,7 @@ struct StringHeader {
      * Layout:     | Encoding | <unused> | Ignore last byte | HC computed |
      * bit number: | 15 .. 12 |          |                1 |           0 |
      */
-    uint16_t flags_;
+    StringFlags flags_;
     alignas(KChar) char data_[];
 
     enum {

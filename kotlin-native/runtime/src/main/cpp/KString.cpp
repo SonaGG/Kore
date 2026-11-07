@@ -432,7 +432,7 @@ static std::optional<KInt> Kotlin_String_cachedHashCode(KConstRef thiz) {
     auto header = StringHeader::of(thiz);
     if (header->size() == 0) return 0;
     auto hash = kotlin::std_support::atomic_ref{header->hashCode_}.load(std::memory_order_relaxed);
-    if (hash || kotlin::std_support::atomic_ref{header->flags_}.load(std::memory_order_relaxed) & StringHeader::HASHCODE_IS_ZERO) {
+    if (hash || kotlin::std_support::atomic_ref{header->flags_.bits()}.load(std::memory_order_relaxed) & StringHeader::HASHCODE_IS_ZERO) {
         return hash;
     }
     return {};
@@ -583,7 +583,7 @@ extern "C" KInt Kotlin_String_hashCode(KRef thiz) {
     if (result != 0) {
         kotlin::std_support::atomic_ref{header->hashCode_}.store(result, std::memory_order_relaxed);
     } else {
-        kotlin::std_support::atomic_ref{header->flags_}.fetch_or(StringHeader::HASHCODE_IS_ZERO, std::memory_order_relaxed);
+        kotlin::std_support::atomic_ref{header->flags_.bits()}.fetch_or(StringHeader::HASHCODE_IS_ZERO, std::memory_order_relaxed);
     }
     return result;
 }

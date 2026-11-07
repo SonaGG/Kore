@@ -25,6 +25,19 @@ bool isArrayLengthAccess(const MDNode *Tag) {
   return Name && Name->getString() == "_ZTS14ArrayLengthRep";
 }
 
+// `StringHeader::flags_` (see KString.h), read through its own type
+// `StringFlagsRep`. Its encoding bits never change; the only bit written later
+// (`HASHCODE_IS_ZERO`) makes a stale read compute the same hash code again.
+bool isStringFlagsAccess(const MDNode *Tag) {
+  if (!Tag || Tag->getNumOperands() < 2)
+    return false;
+  auto *Access = dyn_cast_or_null<MDNode>(Tag->getOperand(1));
+  if (!Access || Access->getNumOperands() < 1)
+    return false;
+  auto *Name = dyn_cast_or_null<MDString>(Access->getOperand(0));
+  return Name && Name->getString() == "_ZTS14StringFlagsRep";
+}
+
 } // namespace
 
 PreservedAnalyses ArrayLengthRangePass::run(Function &F,
@@ -34,6 +47,15 @@ PreservedAnalyses ArrayLengthRangePass::run(Function &F,
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       auto *Load = dyn_cast<LoadInst>(&I);
+      if (Load && Load->getType()->isIntegerTy(16) && !Load->isVolatile() &&
+          Load->isUnordered() &&
+          !Load->hasMetadata(LLVMContext::MD_invariant_load) &&
+          isStringFlagsAccess(Load->getMetadata(LLVMContext::MD_tbaa))) {
+        Load->setMetadata(LLVMContext::MD_invariant_load,
+                          MDNode::get(F.getContext(), {}));
+        Changed = true;
+        continue;
+      }
       if (!Load || !Load->getType()->isIntegerTy(32) || Load->isVolatile() ||
           !Load->isUnordered() ||
           !isArrayLengthAccess(Load->getMetadata(LLVMContext::MD_tbaa)))
