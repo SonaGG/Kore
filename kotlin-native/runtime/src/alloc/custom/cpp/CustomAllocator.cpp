@@ -239,6 +239,7 @@ void CustomAllocator::ResetImmix() noexcept {
 }
 
 void CustomAllocator::TakeImmixHole(ImmixBlock* block, uint8_t* start, uint8_t* end, uint8_t*& cursor, uint8_t*& limit) noexcept {
+    if (__builtin_expect(immixCheck(), false)) block->CheckNoStartsIn(start, end, evacuation_ ? "evacuation hole" : "hole");
     if (!block->Zeroed()) std::memset(start, 0, end - start);
     block->SetUsed();
     cursor = start;

@@ -5,6 +5,10 @@
 
 #include "ImmixBlock.hpp"
 
+#include <cstdlib>
+
+#include "Porting.h"
+
 #include <new>
 
 using namespace kotlin;
@@ -55,6 +59,43 @@ void alloc::ImmixBlock::EnsureNurseryStarts() noexcept {
         element += nurseryElementBytes(element);
     }
     nurseryStartsBuilt_.store(true, std::memory_order_release);
+}
+
+bool alloc::immixCheck() noexcept {
+    static const bool check = std::getenv("KORE_IMMIX_CHECK") != nullptr;
+    return check;
+}
+
+namespace {
+void dumpBlock(const alloc::ImmixBlock* block, const uint8_t* lines, const uint64_t* starts, size_t lineCount, size_t startWords) noexcept {
+    konan::consoleErrorf("kore-immix: block %p lines:", block);
+    for (size_t i = 0; i < lineCount; ++i) konan::consoleErrorf("%c", lines[i] ? '#' : '.');
+    konan::consoleErrorf("\nkore-immix: starts:");
+    for (size_t w = 0; w < startWords; ++w) if (starts[w] != 0) konan::consoleErrorf(" [%zu]=%016llx", w, static_cast<unsigned long long>(starts[w]));
+    konan::consoleErrorf("\n");
+}
+} // namespace
+
+[[noreturn]] void alloc::reportZeroHeaderStart(const uint8_t* element) noexcept {
+    auto* block = ImmixBlock::Of(element);
+    konan::consoleErrorf("kore-immix: sweep found an object start at %p (block %p +%zu) with a zero header (thread %zu)\n", element,
+                         block, static_cast<size_t>(element - reinterpret_cast<const uint8_t*>(block)), static_cast<size_t>(konan::currentThreadId()));
+    block->CheckNoStartsIn(nullptr, nullptr, "dump");
+    std::abort();
+}
+
+void alloc::ImmixBlock::CheckNoStartsIn(const uint8_t* start, const uint8_t* end, const char* what) noexcept {
+    auto* base = reinterpret_cast<const uint8_t*>(this);
+    if (start == nullptr) { dumpBlock(this, lines_, starts_, kLineCount, kStartWords); return; }
+    for (const uint8_t* p = start; p < end; p += kGranule) {
+        if (IsStart(p)) {
+            konan::consoleErrorf("kore-immix: %s: object start at %p (+%zu) inside the hole [+%zu, +%zu) of block %p (recycled %d nursery %d zeroed %d, thread %zu)\n",
+                                 what, p, static_cast<size_t>(p - base), static_cast<size_t>(start - base), static_cast<size_t>(end - base), this,
+                                 recycled_, nursery_, zeroed_, static_cast<size_t>(konan::currentThreadId()));
+            dumpBlock(this, lines_, starts_, kLineCount, kStartWords);
+            std::abort();
+        }
+    }
 }
 
 std::vector<uint8_t*> alloc::ImmixBlock::GetAllocatedBlocks() noexcept {

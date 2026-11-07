@@ -19,6 +19,10 @@
 
 namespace kotlin::alloc {
 
+// Kore: debugging the Immix block metadata (`KORE_IMMIX_CHECK` set).
+bool immixCheck() noexcept;
+[[noreturn]] void reportZeroHeaderStart(const uint8_t* element) noexcept;
+
 // Kore: the nursery (docs/kore/immix-nursery.md). While set (from the start of a full collection to the next young
 // collection), mutators set the start bits of the objects they allocate in nursery blocks, as everywhere else.
 inline std::atomic<bool> gNurseryStartBits{false};
@@ -153,6 +157,9 @@ public:
                 remaining &= remaining - 1;
                 size_t offset = (word * 64 + bit) * kGranule;
                 uint8_t* element = base + offset;
+                if (__builtin_expect(immixCheck(), false) && *reinterpret_cast<const uint32_t*>(element) == 0) {
+                    reportZeroHeaderStart(element);
+                }
                 if (SweepTraits::trySweepElement(element, finalizerQueue, sweepHandle)) {
                     bits &= ~(uint64_t(1) << bit);
                     if ((pins_[word] & (uint64_t(1) << bit)) != 0) __atomic_fetch_and(&pins_[word], ~(uint64_t(1) << bit), __ATOMIC_RELAXED);
@@ -186,6 +193,9 @@ public:
             }
         }
     }
+
+    // Kore: debugging (`KORE_IMMIX_CHECK`): aborts if an object start lies in [start, end) (about to become a hole).
+    void CheckNoStartsIn(const uint8_t* start, const uint8_t* end, const char* what) noexcept;
 
     // Testing method
     std::vector<uint8_t*> GetAllocatedBlocks() noexcept;
