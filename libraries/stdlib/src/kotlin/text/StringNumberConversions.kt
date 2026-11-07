@@ -119,6 +119,19 @@ internal fun String.parseIntOrInvalid(radix: Int): Long {
         limit = -Int.MAX_VALUE
     }
 
+    // Kore: up to 9 ASCII decimal digits cannot overflow, so they need no limit checks. Anything else (other Unicode
+    // digits included) takes the general loop below.
+    if (radix == 10 && length - start <= 9) {
+        var value = 0
+        var i = start
+        while (i < length) {
+            val digit = this[i] - '0'
+            if (digit < 0 || digit > 9) break
+            value = value * 10 + digit
+            i++
+        }
+        if (i == length) return (if (isNegative) -value else value).toLong()
+    }
 
     val limitForMaxRadix = (-Int.MAX_VALUE) / 36
 
