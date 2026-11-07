@@ -25,6 +25,7 @@ import org.jetbrains.kotlin.backend.konan.ir.FunctionsWithoutBoundCheckGenerator
 import org.jetbrains.kotlin.backend.konan.lower.*
 import org.jetbrains.kotlin.backend.konan.lower.InitializersLowering
 import org.jetbrains.kotlin.backend.konan.optimizations.NativeForLoopsLowering
+import org.jetbrains.kotlin.backend.konan.optimizations.ReductionUnrollAndJam
 import org.jetbrains.kotlin.config.phaser.NamedCompilerPhase
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrFile
@@ -176,6 +177,13 @@ private val postInlinePhase = createFileLoweringPhase(
 private val contractsDslRemovePhase = createFileLoweringPhase(
         { context: Context -> ContractsDslRemover(context) },
         name = "RemoveContractsDsl",
+)
+
+// Kore: before the for loops are lowered, while their ranges are still visible.
+private val reductionUnrollAndJamPhase = createFileLoweringPhase(
+        { context: Context -> ReductionUnrollAndJam(context) },
+        name = "ReductionUnrollAndJam",
+        prerequisite = setOf(functionsWithoutBoundCheck)
 )
 
 private val forLoopsPhase = createFileLoweringPhase(
@@ -671,6 +679,7 @@ internal fun NativeSecondStageCompilationConfig.getLoweringsAfterInlining(): Low
         computeTypesPhase, // Inliner erases generics. Trying to restore some of the information and simplify IR.
         primitiveCompareValuesPhase, // Kore: after the types are restored.
         primitiveVariableNarrowingPhase, // Kore: likewise.
+        reductionUnrollAndJamPhase.takeIf { this.optimizationsEnabled },
         forLoopsPhase,
         flattenStringConcatenationPhase,
         stringConcatenationPhase,
