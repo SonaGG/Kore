@@ -1470,10 +1470,32 @@ public fun CharSequence.splitToSequence(vararg delimiters: Char, ignoreCase: Boo
  */
 public fun CharSequence.split(vararg delimiters: Char, ignoreCase: Boolean = false, limit: Int = 0): List<String> {
     if (delimiters.size == 1) {
+        // Kore: one case-sensitive char in a String: searched as a char, without a String for it.
+        if (!ignoreCase && this is String) return splitByChar(delimiters[0], limit)
         return split(delimiters[0].toString(), ignoreCase, limit)
     }
 
     return rangesDelimitedBy(delimiters, ignoreCase = ignoreCase, limit = limit).asIterable().map { substring(it) }
+}
+
+// Kore: `split(delimiter.toString(), false, limit)` for a String, searching for the char.
+private fun String.splitByChar(delimiter: Char, limit: Int): List<String> {
+    requireNonNegativeLimit(limit)
+    var nextIndex = indexOf(delimiter)
+    if (nextIndex == -1 || limit == 1) {
+        return listOf(this)
+    }
+    val isLimited = limit > 0
+    val result = ArrayList<String>(if (isLimited) limit.coerceAtMost(10) else 10)
+    var currentOffset = 0
+    do {
+        result.add(substring(currentOffset, nextIndex))
+        currentOffset = nextIndex + 1
+        if (isLimited && result.size == limit - 1) break
+        nextIndex = indexOf(delimiter, currentOffset)
+    } while (nextIndex != -1)
+    result.add(substring(currentOffset, length))
+    return result
 }
 
 /**
