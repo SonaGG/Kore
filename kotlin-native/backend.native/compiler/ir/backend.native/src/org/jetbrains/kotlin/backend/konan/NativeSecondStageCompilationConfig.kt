@@ -330,7 +330,7 @@ class NativeSecondStageCompilationConfig(
 
     // Kore: see [org.jetbrains.kotlin.backend.konan.lower.Monomorphization].
     val monomorphization: Boolean
-        get() = configuration.get(BinaryOptions.monomorphization) ?: false
+        get() = configuration.get(BinaryOptions.monomorphization) ?: true
 
     // Kore: see [BinaryOptions.invariantTypeInfo].
     val invariantTypeInfo: Boolean
