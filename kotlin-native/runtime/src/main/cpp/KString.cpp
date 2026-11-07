@@ -306,7 +306,7 @@ extern "C" OBJ_GETTER(Kotlin_String_plusImpl, KConstRef thiz, KConstRef other) {
     });
 }
 
-extern "C" OBJ_GETTER(Kotlin_String_unsafeStringFromCharArray, KConstRef thiz, KInt start, KInt size) {
+extern "C" PERFORMANCE_INLINE OBJ_GETTER(Kotlin_String_unsafeStringFromCharArray, KConstRef thiz, KInt start, KInt size) {
     RuntimeAssert(thiz->type_info() == theCharArrayTypeInfo, "Must use a char array");
     if (kotlin::compiler::latin1Strings() && utf16StringIsLatin1(CharArrayAddressOfElementAt(thiz->array(), start), size)) {
         RETURN_RESULT_OF(createString<StringEncoding::kLatin1>, size,
@@ -483,12 +483,12 @@ ALWAYS_INLINE uint64_t magnitudeOf(int64_t value) {
 
 } // namespace
 
-extern "C" OBJ_GETTER(Kotlin_String_templateAllocate, KInt length) {
+extern "C" PERFORMANCE_INLINE OBJ_GETTER(Kotlin_String_templateAllocate, KInt length) {
     if (length < 0) ThrowOutOfMemoryError();
     RETURN_RESULT_OF(CreateUninitializedString, StringEncoding::kUTF16, static_cast<uint32_t>(length));
 }
 
-extern "C" KInt Kotlin_String_templateWriteString(KRef target, KInt position, KConstRef value) {
+extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateWriteString(KRef target, KInt position, KConstRef value) {
     KChar* out = templateChars(target, position);
     return encodingAware(value, [=](auto string) -> KInt {
         auto length = string.sizeInChars();
@@ -501,16 +501,16 @@ extern "C" KInt Kotlin_String_templateWriteString(KRef target, KInt position, KC
     });
 }
 
-extern "C" KInt Kotlin_String_templateWriteLong(KRef target, KInt position, KLong value) {
+extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateWriteLong(KRef target, KInt position, KLong value) {
     return position + static_cast<KInt>(kotlin::formatDecimalTo(value, templateChars(target, position)));
 }
 
-extern "C" KInt Kotlin_String_templateWriteChar(KRef target, KInt position, KChar value) {
+extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateWriteChar(KRef target, KInt position, KChar value) {
     *templateChars(target, position) = value;
     return position + 1;
 }
 
-extern "C" KInt Kotlin_String_templateLongLength(KLong value) {
+extern "C" PERFORMANCE_INLINE KInt Kotlin_String_templateLongLength(KLong value) {
     return decimalLength(magnitudeOf(value)) + (value < 0 ? 1 : 0);
 }
 
@@ -650,11 +650,8 @@ extern "C" KInt Kotlin_String_indexOfString(KConstRef thiz, KConstRef other, KIn
     });
 }
 
-extern "C" KInt Kotlin_String_hashCode(KRef thiz) {
-    if (auto cached = Kotlin_String_cachedHashCode(thiz)) {
-        return *cached;
-    }
-
+// Kore: computing the hash code is out of line; reading the cached one is inlined (see `Kotlin_String_hashCode`).
+static NO_INLINE KInt Kotlin_String_computeHashCode(KRef thiz) {
     KInt result = encodingAware(thiz, [](auto thiz) {
         if constexpr (thiz.encoding == StringEncoding::kUTF16 || thiz.encoding == StringEncoding::kLatin1) {
             return polyHash(thiz.sizeInUnits(), thiz.begin().ptr());
@@ -672,6 +669,13 @@ extern "C" KInt Kotlin_String_hashCode(KRef thiz) {
         kotlin::std_support::atomic_ref{header->flags_.bits()}.fetch_or(StringHeader::HASHCODE_IS_ZERO, std::memory_order_relaxed);
     }
     return result;
+}
+
+extern "C" PERFORMANCE_INLINE KInt Kotlin_String_hashCode(KRef thiz) {
+    if (auto cached = Kotlin_String_cachedHashCode(thiz)) {
+        return *cached;
+    }
+    return Kotlin_String_computeHashCode(thiz);
 }
 
 extern "C" KConstNativePtr Kotlin_Arrays_getStringAddressOfElement(KConstRef thiz, KInt index) {
