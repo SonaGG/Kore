@@ -436,6 +436,12 @@ class LTOPreSplitPipeline(private val config: LlvmPipelineConfig, performanceMan
 
     // The pipeline each partition runs.
     val partitionPasses: String get() = config.ltoPasses ?: "function(irce),lto<$optimizationFlag>"
+
+    // Kore: the module pipeline each partition runs first with [parallelPreLink] (as [ModuleOptimizationPipeline] with
+    // `preLink`, without the internalization done here).
+    val preLinkPasses: String get() = config.modulePasses ?: "lto-pre-link<$optimizationFlag>"
+
+    val pgoUseFile: String? get() = config.pgoUseFile
 }
 
 class ThreadSanitizerPipeline(config: LlvmPipelineConfig, performanceManager: PerformanceManager?, logger: LoggingContext? = null) :

@@ -63,6 +63,37 @@ int LLVMKotlinSplitAndRunPasses(LLVMModuleRef M, unsigned Partitions,
                                 LLVMCodeModel CodeModel, int InlinerThreshold,
                                 const char *PathPrefix);
 
+/// Kore: parallel code generation without optimization. Assigns every
+/// definition of `M` to one of `Partitions` partitions (balanced by size,
+/// COMDAT groups together) with the `kore-partition` attribute, and makes locals
+/// hidden externals (renamed to stay unique). Returns the number of partitions.
+int LLVMKotlinAssignPartitions(LLVMModuleRef M, unsigned Partitions);
+
+/// Kore: reads the bitcode of a module prepared by `LLVMKotlinAssignPartitions`
+/// on `Partitions` threads, each keeping the definitions of its partition, and
+/// writes partition `i` to `<PathPrefix><i>.bc`. Returns the number of files
+/// written, or -1 on an error.
+int LLVMKotlinCodegenPartitionsInParallel(const char *BitcodePath,
+                                          unsigned Partitions,
+                                          const char *PathPrefix);
+
+/// Kore: the whole optimization of a closed-world program, in parallel. `M` (not
+/// optimized yet) is split into `Partitions` partitions, each with read-only
+/// (`available_externally`) copies of the functions of the others that it calls
+/// and the inliner may inline (at most `ImportInstructionLimit` instructions, or
+/// always inlined) and of the constants it reads. Each partition then runs the
+/// module pipeline `PreLinkPasses` (with the profile `PGOUseFile`, if any), the
+/// safepoint cleanup, and the LTO pipeline `LtoPasses`, on its own thread.
+/// Writes partition `i` to `<PathPrefix><i>.bc`. `M` is modified. Returns the
+/// number of files written (one, if `M` is too small to split), or -1 on an error.
+int LLVMKotlinSplitOptimizeWholeProgram(
+    LLVMModuleRef M, unsigned Partitions, const char *PreLinkPasses,
+    const char *LtoPasses, int InlineSafepoints, const char *Triple,
+    const char *CPU, const char *Features, LLVMCodeGenOptLevel Level,
+    LLVMRelocMode Reloc, LLVMCodeModel CodeModel, int InlinerThreshold,
+    unsigned ImportInstructionLimit, const char *PGOUseFile,
+    const char *PathPrefix);
+
 /// Kore: prepares the linked runtime module `Runtime` to be compiled once into a
 /// native object that is shared by many programs, and returns a new module in
 /// the same context to link into a program instead of the runtime.

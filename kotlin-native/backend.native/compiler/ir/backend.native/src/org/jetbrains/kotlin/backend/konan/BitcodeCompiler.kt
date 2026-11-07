@@ -8,8 +8,10 @@ package org.jetbrains.kotlin.backend.konan
 import llvm.LLVMContextCreate
 import llvm.LLVMContextDispose
 import llvm.LLVMDisposeModule
+import llvm.LLVMKotlinCodegenPartitionsInParallel
 import llvm.LLVMKotlinSplitAndRunPasses
 import llvm.LLVMKotlinSplitModule
+import llvm.LLVMKotlinSplitOptimizeWholeProgram
 import org.jetbrains.kotlin.backend.konan.driver.NativeBackendPhaseContext
 import org.jetbrains.kotlin.backend.konan.llvm.parseBitcodeFile
 import org.jetbrains.kotlin.config.nativeBinaryOptions.BinaryOptions
@@ -101,8 +103,10 @@ internal class BitcodeCompiler(
     fun makeObjectFiles(bitcodeFile: File, objectFile: File): List<File> {
         val configurables = platform.configurables
         val ltoPartitions = config.parallelLtoPartitions
+        val debugPartitions = config.debugCodegenPartitions
         val partitions = when {
             ltoPartitions > 1 -> ltoPartitions
+            debugPartitions > 1 -> debugPartitions
             configurables is ClangFlags -> codegenPartitions(configurables, bitcodeFile)
             else -> 1
         }
@@ -115,6 +119,12 @@ internal class BitcodeCompiler(
         val written = if (ltoPartitions > 1) {
             splitAndOptimize(bitcodeFile, partitions, prefix).also {
                 check(it > 0) { "Failed to optimize the partitions of $bitcodeFile" }
+            }
+        } else if (debugPartitions > 1) {
+            // Kore: the definitions were assigned to the parts before the bitcode was written (see [debugCodegenPartitions]),
+            // so the whole program must not be compiled as it is.
+            LLVMKotlinCodegenPartitionsInParallel(bitcodeFile.absoluteFile.normalize().path, partitions, prefix).also {
+                check(it > 0) { "Failed to split $bitcodeFile" }
             }
         } else {
             splitBitcode(bitcodeFile, partitions, prefix)
@@ -142,6 +152,7 @@ internal class BitcodeCompiler(
 
     private fun codegenPartitions(configurables: ClangFlags, bitcodeFile: File): Int {
         val requested = config.codegenPartitions.toInt()
+        // Kore: debug builds are split before the bitcode is written (see [debugCodegenPartitions]).
         if (requested == 1 || !optimize) return 1
         // Splitting would externalize the instrumentation's counters and profile data, which belong to COMDAT groups.
         // Instrumented binaries are only for training, so their compile time matters less.
@@ -158,12 +169,22 @@ internal class BitcodeCompiler(
     // Kore: see [parallelLtoPartitions]. The module has been through the LTO pre-link pipeline and internalized.
     private fun splitAndOptimize(bitcodeFile: File, partitions: Int, prefix: String): Int {
         val pipelineConfig = createLTOFinalPipelineConfig(context, platform.targetTriple.toString(), closedWorld = config.isFinalBinary)
-        val passes = LTOPreSplitPipeline(pipelineConfig, null).use { it.partitionPasses }
+        val pipeline = LTOPreSplitPipeline(pipelineConfig, null)
+        val passes = pipeline.use { it.partitionPasses }
         LlvmOptimizationPipeline.initLLVMOnce()
         val llvmContext = LLVMContextCreate()!!
         try {
             val module = parseBitcodeFile(context, context.diagnosticReporter, llvmContext, bitcodeFile.absoluteFile.normalize().path)
             try {
+                // Kore: the module pipeline too, on the partitions (see [parallelPreLink]).
+                if (config.parallelPreLink) {
+                    return LLVMKotlinSplitOptimizeWholeProgram(
+                            module, partitions, pipeline.preLinkPasses, passes, if (config.inlineForPerformance) 1 else 0,
+                            pipelineConfig.targetTriple, pipelineConfig.cpuModel, pipelineConfig.cpuFeatures,
+                            pipelineConfig.codegenOptimizationLevel, pipelineConfig.relocMode, pipelineConfig.codeModel,
+                            pipelineConfig.inlineThreshold ?: -1, PRE_LINK_IMPORT_INSTRUCTIONS, pipeline.pgoUseFile, prefix,
+                    )
+                }
                 return LLVMKotlinSplitAndRunPasses(
                         module, partitions, passes, pipelineConfig.targetTriple, pipelineConfig.cpuModel, pipelineConfig.cpuFeatures,
                         pipelineConfig.codegenOptimizationLevel, pipelineConfig.relocMode, pipelineConfig.codeModel,
@@ -194,5 +215,7 @@ internal class BitcodeCompiler(
     private companion object {
         const val MIN_SPLIT_BITCODE_BYTES = 256L * 1024
         const val MAX_AUTO_PARTITIONS = 8
+        // Kore: the largest functions (in instructions) copied into the partitions that call them, for inlining.
+        const val PRE_LINK_IMPORT_INSTRUCTIONS = 400
     }
 }

@@ -130,6 +130,11 @@ object BinaryOptions : BinaryOptionRegistry() {
     // Kore: number of partitions compiled in parallel into machine code (0 or unset: automatic, 1: no splitting).
     val codegenPartitions by uintOption()
 
+    // Kore: with partitions, also run the module optimization pipeline on them in parallel (default false: faster to
+    // compile, slower code), instead of
+    // on the whole program first (see `LLVMKotlinSplitOptimizeWholeProgram`).
+    val parallelPreLink by booleanOption()
+
     // Kore: link optimized executables against a separately compiled, cached runtime (default: true).
     val precompileRuntime by booleanOption()
 

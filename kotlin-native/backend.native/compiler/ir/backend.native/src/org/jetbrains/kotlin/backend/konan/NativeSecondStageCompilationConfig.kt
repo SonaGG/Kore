@@ -905,3 +905,32 @@ internal val NativeSecondStageCompilationConfig.parallelLtoPartitions: Int
         if (requested > 1) return requested
         return Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
     }
+
+/**
+ * Kore: whether the partitions of [parallelLtoPartitions] also get the module optimization pipeline, each with copies of
+ * the functions and constants of the others that inlining and folding need, instead of the whole program getting it
+ * first on one thread. Instrumented builds keep the whole-program pipeline (it instruments the module). Off by default:
+ * the partitions miss whole-program information (attributes and internal linkage of functions they do not define), so
+ * the code is slower (about 1.8 times on `sequence_yield`); for development builds where compile time matters more.
+ */
+internal val NativeSecondStageCompilationConfig.parallelPreLink: Boolean
+    get() = parallelLtoPartitions > 1 && !pgoGenerate && configuration.get(BinaryOptions.parallelPreLink) == true
+
+/**
+ * Kore: the number of parts a program built without optimization is compiled to machine code in, in parallel, or 1.
+ * The parts are assigned before the bitcode is written, and each code generation thread reads the bitcode itself (see
+ * `LLVMKotlinCodegenPartitionsInParallel`): without optimization, the code of a part is the same as in the whole.
+ */
+internal val NativeSecondStageCompilationConfig.debugCodegenPartitions: Int
+    get() {
+        if (optimizationsEnabled) return 1
+        val requested = codegenPartitions.toInt()
+        if (requested == 1) return 1
+        if (produce != CompilerOutputKind.PROGRAM) return 1
+        if (sanitizer != null) return 1
+        val configurables = platform.configurables
+        if (configurables !is ClangFlags) return 1
+        if (configurables is AppleConfigurables && configuration.get(BinaryOptions.compileBitcodeWithXcodeLlvm) == true) return 1
+        if (requested > 1) return requested
+        return Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+    }

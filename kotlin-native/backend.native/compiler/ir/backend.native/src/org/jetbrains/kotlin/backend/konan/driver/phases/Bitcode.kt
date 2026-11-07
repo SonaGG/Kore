@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import llvm.LLVMDumpModule
+import llvm.LLVMKotlinAssignPartitions
 import llvm.LLVMIsDeclaration
 import llvm.LLVMModuleRef
 import llvm.LLVMWriteBitcodeToFile
@@ -47,6 +48,8 @@ internal val WriteBitcodeFilePhase = createSimpleNamedCompilerPhase<NativeBacken
 ) { context, (llvmModule, outputFile) ->
     // Insert `_main` after pipeline, so we won't worry about optimizations corrupting entry point.
     insertAliasToEntryPoint(context, llvmModule)
+    // Kore: see [debugCodegenPartitions].
+    context.config.debugCodegenPartitions.takeIf { it > 1 }?.let { LLVMKotlinAssignPartitions(llvmModule, it) }
     LLVMWriteBitcodeToFile(llvmModule, outputFile.canonicalPath)
 }
 
@@ -180,7 +183,8 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
             it.runAndMeasurePhase(StackProtectorPhaseInLLVM, module)
         }
         it.runAndMeasurePhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
-        it.runAndMeasurePhase(ModuleBitcodeOptimizationPhase, module)
+        // Kore: with `parallelPreLink`, the module pipeline (and the safepoint cleanup) run on each partition too.
+        if (!context.config.parallelPreLink) it.runAndMeasurePhase(ModuleBitcodeOptimizationPhase, module)
         // Kore: with parallel partitions, the LTO pipeline runs on each partition (see `BitcodeCompiler`).
         if (context.config.parallelLtoPartitions > 1) {
             it.runAndMeasurePhase(LTOPreSplitOptimizationPhase, module)
@@ -193,5 +197,5 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
             null -> {}
         }
     }
-    runAndMeasurePhase(RemoveRedundantSafepointsPhase)
+    if (!context.config.parallelPreLink) runAndMeasurePhase(RemoveRedundantSafepointsPhase)
 }

@@ -6,7 +6,9 @@
 
 #include "KotlinPlugin.h"
 #include "PassesProfileHandler.h"
+#include "RemoveRedundantSafepoints.h"
 
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/InstIterator.h"
@@ -15,13 +17,21 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
 #include "llvm-c/TargetMachine.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <string>
+
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -388,4 +398,371 @@ int LLVMKotlinSplitAndRunPasses(LLVMModuleRef M, unsigned Partitions,
   for (auto &Thread : Threads)
     Thread.join();
   return Failed ? -1 : static_cast<int>(Parts.size());
+}
+
+int LLVMKotlinSplitOptimizeWholeProgram(
+    LLVMModuleRef M, unsigned Partitions, const char *PreLinkPasses,
+    const char *LtoPasses, int InlineSafepoints, const char *Triple,
+    const char *CPU, const char *Features, LLVMCodeGenOptLevel Level,
+    LLVMRelocMode Reloc, LLVMCodeModel CodeModel, int InlinerThreshold,
+    unsigned ImportInstructionLimit, const char *PGOUseFile,
+    const char *PathPrefix) {
+  Module *Mod = unwrap(M);
+  // As in `LLVMKotlinSplitModule`: externalized locals must stay unique.
+  for (GlobalValue &GV : Mod->global_values()) {
+    if (GV.hasLocalLinkage() && GV.hasName())
+      GV.setName(GV.getName() + ".kore");
+  }
+  // Which partition defines what: the assignment of SplitModule (it keeps
+  // COMDATs and the locals that refer to each other together, and externalizes
+  // in `Mod` the locals referred to across partitions).
+  std::vector<StringSet<>> Defined;
+  SplitModule(*Mod, Partitions, [&](std::unique_ptr<Module> Part) {
+    StringSet<> Names;
+    for (GlobalValue &GV : Part->global_values()) // Aliases too (e.g. `main`).
+      if (!GV.isDeclaration())
+        Names.insert(GV.getName());
+    Defined.push_back(std::move(Names));
+  });
+
+  // What each partition gets a read-only (`available_externally`) copy of: the
+  // functions it calls that the inliner may inline (small ones, or the ones that
+  // must be inlined, and in turn their small callees), and the constants its
+  // code reads (type infos, vtables, ...), so that inlining and constant folding
+  // see the same code as in the whole program.
+  auto MayImport = [&](const Function &F) {
+    return !F.isDeclaration() && F.hasName() && !F.isInterposable() &&
+           !F.getName().starts_with("llvm.") &&
+           !F.hasFnAttribute(Attribute::NoInline) &&
+           (F.hasFnAttribute(Attribute::AlwaysInline) ||
+            F.getInstructionCount() <= ImportInstructionLimit);
+  };
+  auto MayImportVariable = [](const GlobalVariable &V) {
+    return V.hasInitializer() && V.isConstant() && V.hasName() &&
+           !V.isInterposable() && !V.isThreadLocal() &&
+           !V.getName().starts_with("llvm.");
+  };
+  std::vector<StringSet<>> Imported(Defined.size());
+  DenseSet<GlobalValue *> ReferencedByImports;
+  auto AddReferences = [&](Value *Root) {
+    SmallVector<Value *> Stack{Root};
+    DenseSet<Value *> Seen;
+    while (!Stack.empty()) {
+      Value *V = Stack.pop_back_val();
+      if (!Seen.insert(V).second)
+        continue;
+      if (auto *Ref = dyn_cast<GlobalValue>(V)) {
+        ReferencedByImports.insert(Ref);
+      } else if (auto *C = dyn_cast<Constant>(V)) {
+        for (Value *Op : C->operands())
+          Stack.push_back(Op);
+      }
+    }
+  };
+  for (size_t P = 0; P < Defined.size(); ++P) {
+    SmallVector<Function *> Worklist;
+    std::function<void(Value *)> Use = [&](Value *V) {
+      if (auto *CE = dyn_cast<ConstantExpr>(V)) {
+        for (Value *Op : CE->operands())
+          Use(Op);
+        return;
+      }
+      auto *GV = dyn_cast<GlobalValue>(V);
+      if (GV == nullptr || !GV->hasName() || Defined[P].contains(GV->getName()) ||
+          Imported[P].contains(GV->getName()))
+        return;
+      if (auto *F = dyn_cast<Function>(GV)) {
+        if (MayImport(*F)) {
+          Imported[P].insert(F->getName());
+          Worklist.push_back(F);
+        }
+      } else if (auto *Var = dyn_cast<GlobalVariable>(GV)) {
+        if (MayImportVariable(*Var))
+          Imported[P].insert(Var->getName());
+      }
+    };
+    auto Scan = [&](Function &F) {
+      for (Instruction &I : instructions(F))
+        for (Value *Operand : I.operands())
+          Use(Operand);
+    };
+    for (Function &F : *Mod)
+      if (!F.isDeclaration() && F.hasName() && Defined[P].contains(F.getName()))
+        Scan(F);
+    while (!Worklist.empty())
+      Scan(*Worklist.pop_back_val());
+    for (auto &Entry : Imported[P]) {
+      GlobalValue *GV = Mod->getNamedValue(Entry.getKey());
+      if (GV == nullptr)
+        continue;
+      ReferencedByImports.insert(GV);
+      if (auto *F = dyn_cast<Function>(GV)) {
+        for (Instruction &I : instructions(*F))
+          for (Value *Operand : I.operands())
+            AddReferences(Operand);
+      } else if (auto *Var = dyn_cast<GlobalVariable>(GV)) {
+        AddReferences(Var->getInitializer());
+      }
+    }
+  }
+  // A copy refers to the symbols of its original, so the locals among those
+  // become hidden externals (still defined once, in their own partition).
+  for (GlobalValue *GV : ReferencedByImports) {
+    if (GV->hasLocalLinkage()) {
+      GV->setLinkage(GlobalValue::ExternalLinkage);
+      GV->setVisibility(GlobalValue::HiddenVisibility);
+    }
+  }
+
+  // The partitions, each with its definitions and copies, as bitcode: each is
+  // optimized in its own context (contexts are not thread safe).
+  std::vector<SmallString<0>> Parts;
+  for (size_t P = 0; P < Defined.size(); ++P) {
+    ValueToValueMapTy VMap;
+    std::unique_ptr<Module> Part = CloneModule(*Mod, VMap, [&](const GlobalValue *GV) {
+      return GV->hasName() && (Defined[P].contains(GV->getName()) || Imported[P].contains(GV->getName()));
+    });
+    for (GlobalObject &GO : Part->global_objects()) {
+      if (GO.isDeclaration() || !Imported[P].contains(GO.getName()))
+        continue;
+      GO.setComdat(nullptr);
+      GO.setLinkage(GlobalValue::AvailableExternallyLinkage);
+      GO.setVisibility(GlobalValue::DefaultVisibility);
+    }
+    // Declarations must not keep local linkage (their definitions are elsewhere).
+    for (GlobalValue &GV : Part->global_values()) {
+      if (GV.isDeclaration() && GV.hasLocalLinkage()) {
+        GV.setLinkage(GlobalValue::ExternalLinkage);
+        GV.setVisibility(GlobalValue::HiddenVisibility);
+      }
+    }
+    SmallString<0> Buffer;
+    raw_svector_ostream OS(Buffer);
+    WriteBitcodeToFile(*Part, OS);
+    Parts.push_back(std::move(Buffer));
+  }
+
+  std::atomic<bool> Failed = false;
+  std::vector<std::thread> Threads;
+  for (size_t I = 0; I < Parts.size(); ++I) {
+    Threads.emplace_back([&, I] {
+      LLVMContext Context;
+      auto Parsed = parseBitcodeFile(
+          MemoryBufferRef(StringRef(Parts[I].data(), Parts[I].size()), "partition"), Context);
+      if (!Parsed) {
+        consumeError(Parsed.takeError());
+        Failed = true;
+        return;
+      }
+      std::unique_ptr<Module> Part = std::move(*Parsed);
+      Parts[I].clear();
+      LLVMTargetRef Target;
+      if (LLVMGetTargetFromTriple(Triple, &Target, nullptr) != 0) {
+        Failed = true;
+        return;
+      }
+      LLVMTargetMachineRef TM = LLVMCreateTargetMachine(Target, Triple, CPU, Features, Level, Reloc, CodeModel);
+      // The module pipeline (in its LTO pre-link form, which drops the copies at
+      // its end), then the safepoint cleanup, then the LTO pipeline: as on the
+      // whole program.
+      LLVMErrorRef Err = LLVMKotlinRunPasses(wrap(Part.get()), PreLinkPasses, TM, InlinerThreshold,
+                                             nullptr, nullptr, nullptr, nullptr, PGOUseFile);
+      if (Err == nullptr) {
+        LLVMKotlinRemoveRedundantSafepoints(wrap(Part.get()), InlineSafepoints);
+        Err = LLVMKotlinRunPasses(wrap(Part.get()), LtoPasses, TM, InlinerThreshold,
+                                  nullptr, nullptr, nullptr, nullptr, nullptr);
+      }
+      LLVMDisposeTargetMachine(TM);
+      if (Err != nullptr) {
+        LLVMConsumeError(Err);
+        Failed = true;
+        return;
+      }
+      std::error_code EC;
+      raw_fd_ostream OS(std::string(PathPrefix) + std::to_string(I) + ".bc", EC, sys::fs::OF_None);
+      if (EC) {
+        Failed = true;
+        return;
+      }
+      WriteBitcodeToFile(*Part, OS);
+    });
+  }
+  for (auto &Thread : Threads)
+    Thread.join();
+  return Failed ? -1 : static_cast<int>(Parts.size());
+}
+
+namespace {
+
+constexpr const char *kKorePartitionAttribute = "kore-partition";
+
+unsigned partitionOf(const GlobalObject &GO) {
+  if (auto *F = dyn_cast<Function>(&GO)) {
+    Attribute A = F->getFnAttribute(kKorePartitionAttribute);
+    if (A.isStringAttribute()) {
+      unsigned P = 0;
+      if (!A.getValueAsString().getAsInteger(10, P))
+        return P;
+    }
+  } else if (auto *V = dyn_cast<GlobalVariable>(&GO)) {
+    if (V->hasAttribute(kKorePartitionAttribute)) {
+      unsigned P = 0;
+      if (!V->getAttribute(kKorePartitionAttribute).getValueAsString().getAsInteger(10, P))
+        return P;
+    }
+  }
+  return 0;
+}
+
+} // namespace
+
+int LLVMKotlinAssignPartitions(LLVMModuleRef M, unsigned Partitions) {
+  Module *Mod = unwrap(M);
+  if (Partitions <= 1)
+    return 1;
+  // Locals become hidden externals (renamed to stay unique): any partition may
+  // refer to them. Without optimization, this does not change the code.
+  for (GlobalValue &GV : Mod->global_values()) {
+    if (GV.getName().starts_with("llvm."))
+      continue;
+    if (GV.hasLocalLinkage()) {
+      if (GV.hasName())
+        GV.setName(GV.getName() + ".kore");
+      else
+        GV.setName("kore.unnamed");
+      GV.setLinkage(GlobalValue::ExternalLinkage);
+      GV.setVisibility(GlobalValue::HiddenVisibility);
+    }
+  }
+  // Groups that must stay together: the members of a COMDAT, and aliases with
+  // what they alias. Each group goes to the partition with the least code so far.
+  DenseMap<const Comdat *, unsigned> ComdatPartition;
+  std::vector<uint64_t> Size(Partitions, 0);
+  auto Lightest = [&] {
+    return static_cast<unsigned>(std::min_element(Size.begin(), Size.end()) - Size.begin());
+  };
+  auto Assign = [&](GlobalObject &GO, unsigned P) {
+    std::string Value = std::to_string(P);
+    if (auto *F = dyn_cast<Function>(&GO)) {
+      F->addFnAttr(kKorePartitionAttribute, Value);
+      Size[P] += F->getInstructionCount() + 1;
+    } else if (auto *V = dyn_cast<GlobalVariable>(&GO)) {
+      V->addAttribute(kKorePartitionAttribute, Value);
+      Size[P] += 1;
+    }
+  };
+  for (GlobalObject &GO : Mod->global_objects()) {
+    if (GO.isDeclaration() || GO.getName().starts_with("llvm."))
+      continue;
+    unsigned P;
+    if (const Comdat *C = GO.getComdat()) {
+      auto It = ComdatPartition.find(C);
+      P = It != ComdatPartition.end() ? It->second : (ComdatPartition[C] = Lightest());
+    } else {
+      P = Lightest();
+    }
+    Assign(GO, P);
+  }
+  return static_cast<int>(Partitions);
+}
+
+int LLVMKotlinCodegenPartitionsInParallel(const char *BitcodePath,
+                                          unsigned Partitions,
+                                          const char *PathPrefix) {
+  // Each thread reads the whole program into its own context and keeps the
+  // definitions of its partition (see `LLVMKotlinAssignPartitions`): reading in
+  // parallel is cheaper than splitting one module into copies, one at a time.
+  auto Buffer = MemoryBuffer::getFile(BitcodePath);
+  if (!Buffer)
+    return -1;
+  std::atomic<bool> Failed = false;
+  std::vector<std::thread> Threads;
+  for (unsigned I = 0; I < Partitions; ++I) {
+    Threads.emplace_back([&, I] {
+      LLVMContext Context;
+      // Lazily: only the bodies of this partition's functions are read (their
+      // attributes, which say where they belong, are read with the module).
+      auto Parsed = getLazyBitcodeModule((*Buffer)->getMemBufferRef(), Context,
+                                         /* ShouldLazyLoadMetadata = */ true);
+      if (!Parsed) {
+        consumeError(Parsed.takeError());
+        Failed = true;
+        return;
+      }
+      std::unique_ptr<Module> Part = std::move(*Parsed);
+      // Aliases of other partitions become declarations of what they alias (first:
+      // an alias must not point to a declaration when the module is verified).
+      SmallVector<GlobalAlias *> ForeignAliases;
+      for (GlobalAlias &GA : Part->aliases()) {
+        auto *Target = dyn_cast<GlobalObject>(GA.getAliaseeObject());
+        if (Target != nullptr && !Target->isDeclaration() && partitionOf(*Target) != I)
+          ForeignAliases.push_back(&GA);
+      }
+      for (GlobalAlias *GA : ForeignAliases) {
+        GlobalValue *Declaration;
+        if (auto *F = dyn_cast<Function>(GA->getAliaseeObject())) {
+          Declaration = Function::Create(F->getFunctionType(), GlobalValue::ExternalLinkage, "", Part.get());
+        } else {
+          Declaration = new GlobalVariable(*Part, GA->getValueType(), false, GlobalValue::ExternalLinkage, nullptr);
+        }
+        Declaration->takeName(GA);
+        GA->replaceAllUsesWith(Declaration);
+        GA->eraseFromParent();
+      }
+      for (Function &F : *Part) {
+        if (!F.isMaterializable())
+          continue;
+        if (partitionOf(F) == I) {
+          if (Error E = F.materialize()) {
+            consumeError(std::move(E));
+            Failed = true;
+            return;
+          }
+        } else {
+          F.deleteBody();
+          F.setComdat(nullptr);
+          F.setLinkage(GlobalValue::ExternalLinkage);
+        }
+      }
+      if (Error E = Part->materializeAll()) {
+        consumeError(std::move(E));
+        Failed = true;
+        return;
+      }
+      // Lazily read metadata may attach the debug info of a definition to what is
+      // now a declaration.
+      for (Function &F : *Part)
+        if (F.isDeclaration())
+          F.clearMetadata();
+      for (GlobalObject &GO : Part->global_objects()) {
+        if (GO.isDeclaration() || GO.getName().starts_with("llvm.") || partitionOf(GO) == I)
+          continue;
+        if (auto *F = dyn_cast<Function>(&GO)) {
+          F->deleteBody();
+        } else if (auto *V = dyn_cast<GlobalVariable>(&GO)) {
+          V->setInitializer(nullptr);
+          V->eraseMetadata(LLVMContext::MD_dbg);
+        }
+        GO.setComdat(nullptr);
+        GO.setLinkage(GlobalValue::ExternalLinkage);
+      }
+      // Module-level inline assembly and static constructors belong to one part.
+      if (I != 0) {
+        Part->setModuleInlineAsm("");
+        for (const char *Name : {"llvm.global_ctors", "llvm.global_dtors", "llvm.used", "llvm.compiler.used"})
+          if (GlobalVariable *GV = Part->getNamedGlobal(Name))
+            GV->eraseFromParent();
+      }
+      std::error_code EC;
+      raw_fd_ostream OS(std::string(PathPrefix) + std::to_string(I) + ".bc", EC, sys::fs::OF_None);
+      if (EC) {
+        Failed = true;
+        return;
+      }
+      WriteBitcodeToFile(*Part, OS);
+    });
+  }
+  for (auto &Thread : Threads)
+    Thread.join();
+  return Failed ? -1 : static_cast<int>(Partitions);
 }
