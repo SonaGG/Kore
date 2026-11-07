@@ -19,7 +19,13 @@ using namespace kotlin;
 // Kore: meta objects are 32-byte aligned (`ExtraObjectCell`), so header bits 2-4 are free for the GC.
 extern "C" const uintptr_t Kotlin_objectHeaderFlagsMask = 31;
 
-alloc::Allocator::ThreadData::ThreadData(Allocator& allocator) noexcept : impl_(std::make_unique<Impl>(allocator.impl())) {}
+// Kore: created on its thread (`ThreadRegistry::RegisterCurrentThread`), whose mutator allocator bumps through
+// `tMutatorBump`. Not on Apple platforms, where thread-local storage may be gone before the thread unregisters.
+alloc::Allocator::ThreadData::ThreadData(Allocator& allocator) noexcept : impl_(std::make_unique<Impl>(allocator.impl())) {
+#if !defined(__APPLE__)
+    impl_->alloc().UseThreadBump();
+#endif
+}
 
 alloc::Allocator::ThreadData::~ThreadData() {
     // Kore: hand the nursery block back (under the GC lock: the thread is native, a collection may be running).

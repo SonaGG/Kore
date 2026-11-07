@@ -26,6 +26,8 @@
 
 namespace kotlin::alloc {
 
+THREAD_LOCAL_VARIABLE ImmixBump tMutatorBump;
+
 namespace {
 
 // Kore: allocation polls (see `Allocate`) only on threads attached to the runtime (the allocator is also used without
@@ -60,10 +62,11 @@ PERFORMANCE_INLINE ObjHeader* CustomAllocator::CreateObject(const TypeInfo* type
                 memory = top;
             }
         } else {
-            uint8_t* top = immixCursor_;
-            if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
-                immixCursor_ = top + bytes;
-                if (NeedsStartBits()) ImmixBlock::MarkStart(top);
+            ImmixBump& bump = FastBump();
+            uint8_t* top = bump.cursor;
+            if (__builtin_expect(bytes <= ImmixBlock::kMaxObjectBytes && bytes <= static_cast<size_t>(bump.limit - top), true)) {
+                bump.cursor = top + bytes;
+                if (MutatorNeedsStartBits()) ImmixBlock::MarkStart(top);
                 memory = top;
             }
         }
@@ -106,12 +109,13 @@ PERFORMANCE_INLINE ArrayHeader* CustomAllocator::CreateArray(const TypeInfo* typ
     if (compiler::immix() && compiler::gcNurserySize() == 0) {
         auto descriptor = CustomHeapArray::descriptorFrom(typeInfo, count);
         uint64_t size = descriptor.size();
-        uint8_t* top = immixCursor_;
+        ImmixBump& bump = FastBump();
+        uint8_t* top = bump.cursor;
         if (__builtin_expect(size <= ImmixBlock::kMaxObjectBytes, true)) {
             size_t bytes = AllocationSize::bytesAtLeast(size).inBytes();
-            if (__builtin_expect(bytes <= static_cast<size_t>(immixLimit_ - top), true)) {
-                immixCursor_ = top + bytes;
-                if (NeedsStartBits()) ImmixBlock::MarkStart(top);
+            if (__builtin_expect(bytes <= static_cast<size_t>(bump.limit - top), true)) {
+                bump.cursor = top + bytes;
+                if (MutatorNeedsStartBits()) ImmixBlock::MarkStart(top);
                 auto& heapArray = *descriptor.construct(top);
                 ArrayHeader* array = heapArray.array();
                 array->typeInfoOrMeta_ = const_cast<TypeInfo*>(typeInfo);
@@ -233,7 +237,7 @@ uint8_t* CustomAllocator::AllocateLargerThanImmix(uint64_t cellCount, bool poll)
 void CustomAllocator::ResetImmix() noexcept {
     SealNursery();
     nurseryBlock_ = nullptr;
-    immixCursor_ = immixLimit_ = nullptr;
+    bump_->cursor = bump_->limit = nullptr;
     immixBlock_ = nullptr;
     immixNextLine_ = 0;
     overflowCursor_ = overflowLimit_ = nullptr;
@@ -258,9 +262,9 @@ uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size, bool poll
     // Kore: medium objects don't skip holes that are too small for them (small objects will fill them).
     if (bytes > ImmixBlock::kLineSize) return AllocateInImmixOverflow(bytes, poll);
     while (true) {
-        uint8_t* top = immixCursor_;
-        if (bytes <= static_cast<size_t>(immixLimit_ - top)) {
-            immixCursor_ = top + bytes;
+        uint8_t* top = bump_->cursor;
+        if (bytes <= static_cast<size_t>(bump_->limit - top)) {
+            bump_->cursor = top + bytes;
             if (NeedsStartBits()) ImmixBlock::MarkStart(top);
             return top;
         }
@@ -268,14 +272,14 @@ uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size, bool poll
         if (compiler::immixNursery() && !evacuation_) {
             if (poll) {
                 pollIfAttached();
-                if (bytes <= static_cast<size_t>(immixLimit_ - immixCursor_)) continue;
+                if (bytes <= static_cast<size_t>(bump_->limit - bump_->cursor)) continue;
             }
             SealNursery();
             ImmixBlock* block = heap_.immixBlocks().TakeFreeBlock();
             block->SetNursery(true);
             immixBlock_ = nullptr;
             nurseryBlock_ = block;
-            TakeImmixHole(block, block->Begin(), block->End(), immixCursor_, immixLimit_);
+            TakeImmixHole(block, block->Begin(), block->End(), bump_->cursor, bump_->limit);
             continue;
         }
         uint8_t* start;
@@ -285,14 +289,14 @@ uint8_t* CustomAllocator::AllocateInImmixSlowPath(AllocationSize size, bool poll
             // collection resets).
             if (poll) {
                 pollIfAttached();
-                if (bytes <= static_cast<size_t>(immixLimit_ - immixCursor_)) continue;
+                if (bytes <= static_cast<size_t>(bump_->limit - bump_->cursor)) continue;
             }
             immixBlock_ = heap_.immixBlocks().TakeBlock();
             immixNextLine_ = ImmixBlock::FirstLine();
             bool found = immixBlock_->NextHole(immixNextLine_, start, end);
             RuntimeAssert(found, "Immix block %p from the heap has no hole", immixBlock_);
         }
-        TakeImmixHole(immixBlock_, start, end, immixCursor_, immixLimit_);
+        TakeImmixHole(immixBlock_, start, end, bump_->cursor, bump_->limit);
     }
 }
 
