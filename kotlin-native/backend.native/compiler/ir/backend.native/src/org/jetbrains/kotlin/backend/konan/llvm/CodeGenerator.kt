@@ -1333,10 +1333,36 @@ internal abstract class FunctionGenerationContext(
         // function itself (and one alloca may hold objects of different classes), so an invariant load could be moved
         // above that store. What it points to (a type info, or a meta object whose first field is the same type info)
         // never changes. Unordered (instead of relaxed) atomicity keeps the racy read defined while allowing hoisting.
+        return loadInvariant(llvm.pointerType, loadTypeInfoOrMeta(objPtr), LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
+    }
+
+    /** Kore: the type info or meta object the header of `objPtr` points to (without the tag and GC bits). */
+    fun loadTypeInfoOrMeta(objPtr: LLVMValueRef): LLVMValueRef {
         val header = load(llvm.pointerType, objPtr, memoryOrder = LLVMAtomicOrdering.LLVMAtomicOrderingUnordered,
                 alignment = LLVMABIAlignmentOfType(codegen.llvmTargetData, llvm.pointerType))
-        val untagged = intToPtr(and(ptrToInt(header, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)
-        return loadInvariant(llvm.pointerType, untagged, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered)
+        return intToPtr(and(ptrToInt(header, codegen.intPtrType), codegen.immTypeInfoMask), llvm.pointerType)
+    }
+
+    /**
+     * Kore: whether `objPtr` is an instance of a class with type info `typeInfo` and no subclasses. Its header points
+     * to that type info, or to a meta object whose first field does; the latter is only checked when the header differs,
+     * which keeps the load of the type info's first field off the path of `when` chains of such checks.
+     */
+    fun isInstanceOfExactClass(objPtr: LLVMValueRef, typeInfo: LLVMValueRef): LLVMValueRef {
+        val header = loadTypeInfoOrMeta(objPtr)
+        val entry = currentBlock
+        val start = position()?.start
+        val metaBB = basicBlock("instanceof_meta", start)
+        val doneBB = basicBlock("instanceof_done", start)
+        condBr(icmpEq(header, typeInfo), doneBB, metaBB)
+        positionAtEnd(metaBB)
+        val viaMeta = icmpEq(loadInvariant(llvm.pointerType, header, LLVMAtomicOrdering.LLVMAtomicOrderingUnordered), typeInfo)
+        val metaEnd = currentBlock
+        br(doneBB)
+        positionAtEnd(doneBB)
+        val result = phi(llvm.int1Type)
+        addPhiIncoming(result, entry to llvm.int1(true), metaEnd to viaMeta)
+        return result
     }
 
     /** Kore: a load from memory that never changes while it is reachable (type infos and their tables). */

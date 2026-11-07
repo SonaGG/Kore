@@ -1545,10 +1545,17 @@ internal class CodeGeneratorVisitor(
         if (dstClass.defaultType.isObjCObjectType()) {
             genInstanceOfObjC(obj, dstClass)
         } else with(VirtualTablesLookup) {
-            checkIsSubtype(
-                    objTypeInfo = loadTypeInfo(obj),
-                    dstClass
-            )
+            // Kore: a class without subclasses: the header against the type info first (see `isInstanceOfExactClass`).
+            val exactClass = context.ghaEnabled() && context.config.invariantTypeInfo && !dstClass.isInterface &&
+                    context.getLayoutBuilder(dstClass).hierarchyInfo.let { it.classIdLo == it.classIdHi }
+            if (exactClass) {
+                isInstanceOfExactClass(obj, codegen.typeInfoValue(dstClass))
+            } else {
+                checkIsSubtype(
+                        objTypeInfo = loadTypeInfo(obj),
+                        dstClass
+                )
+            }
         }
     }
 
