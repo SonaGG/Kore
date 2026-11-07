@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "CompilerConstants.hpp"
 #include "DecimalFormat.hpp"
 #include <cstdio>
 #include <limits.h>
@@ -68,12 +69,29 @@ template <typename T> OBJ_GETTER(Kotlin_toStringRadix, T value, KInt radix) {
 
 }  // namespace
 
+extern "C" KInt Kotlin_String_templateLongLength(KLong value);
+extern "C" KInt Kotlin_String_templateWriteLong(KRef target, KInt position, KLong value);
+
+namespace {
+
+// Kore: the digits are written straight into a new UTF-16 string (as string templates do), without a copy.
+ALWAYS_INLINE OBJ_GETTER(decimalString, KLong value) {
+  if (kotlin::compiler::latin1Strings()) {
+    char cstring[21];
+    auto length = kotlin::formatDecimal(value, cstring);
+    RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
+  }
+  auto result = CreateUninitializedString(StringEncoding::kUTF16, static_cast<uint32_t>(Kotlin_String_templateLongLength(value)), OBJ_RESULT);
+  Kotlin_String_templateWriteLong(result, 0, value);
+  return result;
+}
+
+}  // namespace
+
 extern "C" {
 
 OBJ_GETTER(Kotlin_Byte_toString, KByte value) {
-  char cstring[21];
-  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
+  RETURN_RESULT_OF(decimalString, static_cast<KLong>(value));
 }
 
 OBJ_GETTER(Kotlin_Char_toString, KChar value) {
@@ -81,15 +99,11 @@ OBJ_GETTER(Kotlin_Char_toString, KChar value) {
 }
 
 OBJ_GETTER(Kotlin_Short_toString, KShort value) {
-  char cstring[21];
-  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
+  RETURN_RESULT_OF(decimalString, static_cast<KLong>(value));
 }
 
 PERFORMANCE_INLINE OBJ_GETTER(Kotlin_Int_toString, KInt value) {
-  char cstring[21];
-  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
+  RETURN_RESULT_OF(decimalString, static_cast<KLong>(value));
 }
 
 OBJ_GETTER(Kotlin_Int_toStringRadix, KInt value, KInt radix) {
@@ -97,9 +111,7 @@ OBJ_GETTER(Kotlin_Int_toStringRadix, KInt value, KInt radix) {
 }
 
 PERFORMANCE_INLINE OBJ_GETTER(Kotlin_Long_toString, KLong value) {
-  char cstring[21];
-  auto length = kotlin::formatDecimal(value, cstring); // Kore: instead of snprintf
-  RETURN_RESULT_OF(CreateStringFromAscii, cstring, static_cast<uint32_t>(length));
+  RETURN_RESULT_OF(decimalString, value);
 }
 
 OBJ_GETTER(Kotlin_Long_toStringRadix, KLong value, KInt radix) {
