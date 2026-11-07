@@ -147,12 +147,18 @@ internal class Monomorphization(private val context: Context, private val module
     private fun substitution(typeParameters: List<IrTypeParameter>, arguments: List<IrType?>): Map<IrTypeParameterSymbol, IrType> =
             typeParameters.zip(arguments).mapNotNull { pair -> pair.second?.let { pair.first.symbol to it } }.toMap()
 
-    private class SubstitutingTypeRemapper(
-            private val delegate: TypeRemapper, private val substitution: Map<IrTypeParameterSymbol, IrType>,
-    ) : TypeRemapper {
-        override fun enterScope(irTypeParametersContainer: IrTypeParametersContainer) = delegate.enterScope(irTypeParametersContainer)
-        override fun leaveScope() = delegate.leaveScope()
-        override fun remapType(type: IrType): IrType = delegate.remapType(type.substitute(substitution))
+    // Substitutes types in a copy (after `deepCopyWithSymbols`, whose own type remapper must stay a plain
+    // `DeepCopyTypeRemapper`: it is connected to the copier only then).
+    private class SubstitutingTypeRemapper(private val substitution: Map<IrTypeParameterSymbol, IrType>) : TypeRemapper {
+        override fun enterScope(irTypeParametersContainer: IrTypeParametersContainer) {}
+        override fun leaveScope() {}
+        override fun remapType(type: IrType): IrType = type.substitute(substitution)
+    }
+
+    private inline fun <reified T : IrTypeParametersContainer> T.copyWithSubstitution(parent: IrDeclarationParent, arguments: List<IrType?>): T {
+        val copy = deepCopyWithSymbols(parent)
+        copy.remapTypes(SubstitutingTypeRemapper(substitution(copy.typeParameters, arguments)))
+        return copy
     }
 
     private fun suffix(arguments: List<IrType?>) = arguments.joinToString("") { "\$" + (it?.classOrNull?.owner?.name?.asString() ?: "_") }
@@ -161,10 +167,7 @@ internal class Monomorphization(private val context: Context, private val module
             this is IrConstructor && parameters.singleOrNull()?.name?.asString() == NO_INIT_PARAMETER
 
     private fun copyClass(irClass: IrClass, arguments: List<IrType?>): IrClass {
-        val substitution = substitution(irClass.typeParameters, arguments)
-        val copy = irClass.deepCopyWithSymbols(irClass.parent) { symbolRemapper ->
-            SubstitutingTypeRemapper(DeepCopyTypeRemapper(symbolRemapper), substitution)
-        }
+        val copy = irClass.copyWithSubstitution(irClass.parent, arguments)
         copy.declarations.removeAll { it.isNoInitConstructor() }
         copy.name = Name.identifier(irClass.name.asString() + suffix(arguments))
         copy.modality = Modality.FINAL
@@ -380,10 +383,7 @@ internal class Monomorphization(private val context: Context, private val module
         if (key in functionCopies || key in inProgress) return null
         inProgress += key
         val copy = try {
-            val substitution = substitution(function.typeParameters, key.arguments)
-            function.deepCopyWithSymbols(function.parent) { symbolRemapper ->
-                SubstitutingTypeRemapper(DeepCopyTypeRemapper(symbolRemapper), substitution)
-            }.also {
+            function.copyWithSubstitution(function.parent, key.arguments).also {
                 it.name = Name.identifier(function.name.asString() + suffix(key.arguments))
                 copyRoots += it
                 it.annotations = emptyList()
