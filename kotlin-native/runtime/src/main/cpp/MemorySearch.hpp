@@ -72,4 +72,18 @@ inline size_t findUnit(const Unit* units, size_t from, size_t n, Unit value) noe
     return n;
 }
 
+// The index of the first occurrence of `pattern[0, m)` (m > 0) in `units[from, n)`, or `n` if there is none: candidates
+// are found by their first unit, a vector at a time.
+template <typename Unit>
+inline size_t findUnits(const Unit* units, size_t from, size_t n, const Unit* pattern, size_t m) noexcept {
+    if (m > n) return n;
+    size_t last = n - m + 1; // Candidates start before `last`.
+    for (size_t i = from; i < last; ++i) {
+        i = findUnit<Unit>(units, i, last, pattern[0]);
+        if (i == last) break;
+        if (firstMismatchByte(units + i + 1, pattern + 1, (m - 1) * sizeof(Unit)) == (m - 1) * sizeof(Unit)) return i;
+    }
+    return n;
+}
+
 } // namespace kotlin

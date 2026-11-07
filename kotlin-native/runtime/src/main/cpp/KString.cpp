@@ -637,6 +637,14 @@ extern "C" KInt Kotlin_String_indexOfString(KConstRef thiz, KConstRef other, KIn
             return static_cast<KInt>(unsignedIndex);
         }
 
+        // Kore: one unit per char (UTF-16, Latin-1): search for the first unit a vector at a time.
+        if constexpr (thiz.encoding == other.encoding &&
+                      (thiz.encoding == StringEncoding::kUTF16 || thiz.encoding == StringEncoding::kLatin1)) {
+            using Unit = typename decltype(thiz)::unit;
+            size_t found = findUnits<Unit>(thiz.begin().ptr(), unsignedIndex, thizLength, other.begin().ptr(), otherLength);
+            return found == thizLength ? -1 : static_cast<KInt>(found);
+        }
+
         auto start = thiz.begin() + unsignedIndex, end = thiz.end();
         auto patternStart = other.begin(), patternEnd = other.end();
         if constexpr (thiz.encoding == other.encoding) {
