@@ -114,7 +114,9 @@ public fun String.toIntOrNull(radix: Int): Int? {
     var limitBeforeMul = limitForMaxRadix
     var result = 0
     for (i in start until length) {
-        val digit = digitOf(this[i], radix)
+        // Kore: ASCII digits without the Unicode digit lookup of `digitOf` (which gives the same value for them).
+        val char = this[i]
+        val digit = if (char in '0'..'9' && radix >= 10) char - '0' else digitOf(char, radix)
 
         if (digit < 0) return null
         if (result < limitBeforeMul) {
@@ -194,7 +196,9 @@ public fun String.toLongOrNull(radix: Int): Long? {
     var limitBeforeMul = limitForMaxRadix
     var result = 0L
     for (i in start until length) {
-        val digit = digitOf(this[i], radix)
+        // Kore: ASCII digits without the Unicode digit lookup of `digitOf` (which gives the same value for them).
+        val char = this[i]
+        val digit = if (char in '0'..'9' && radix >= 10) char - '0' else digitOf(char, radix)
 
         if (digit < 0) return null
         if (result < limitBeforeMul) {
