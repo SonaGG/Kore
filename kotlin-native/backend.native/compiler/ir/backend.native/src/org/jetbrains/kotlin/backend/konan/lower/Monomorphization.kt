@@ -285,12 +285,20 @@ internal class Monomorphization(private val context: Context, private val module
             override fun visitConstructorCall(expression: IrConstructorCall): IrExpression {
                 expression.transformChildrenVoid(this)
                 val array = expression.type.primitiveArrayOrNull() ?: return expression
-                // `Array<P>(size)`: the primitive array's constructor of the same shape.
-                val constructor = array.owner.declarations.filterIsInstance<IrConstructor>()
-                        .singleOrNull { it.parameters.size == expression.arguments.size && it.parameters.all { p -> p.type.isInt() } }
-                        ?: throw Abort("array constructor")
-                return IrConstructorCallImpl.fromSymbolOwner(expression.startOffset, expression.endOffset, array.defaultType, constructor.symbol)
-                        .also { for (i in expression.arguments.indices) it.arguments[i] = expression.arguments[i] }
+                return primitiveArrayConstructorCall(expression, array)
+            }
+
+            override fun visitSetField(expression: IrSetField): IrExpression {
+                expression.transformChildrenVoid(this)
+                expression.symbol.owner.type.arrayStorageOrNull()?.let { expression.value = retypeCreation(expression.value, it) }
+                return expression
+            }
+
+            override fun visitVariable(declaration: IrVariable): IrStatement {
+                declaration.transformChildrenVoid(this)
+                val array = declaration.type.arrayStorageOrNull()
+                if (array != null) declaration.initializer = declaration.initializer?.let { retypeCreation(it, array) }
+                return declaration
             }
 
             override fun visitCall(expression: IrCall): IrExpression {
@@ -340,12 +348,21 @@ internal class Monomorphization(private val context: Context, private val module
                 return expression
             }
 
+            override fun visitReturn(expression: IrReturn): IrExpression {
+                expression.transformChildrenVoid(this)
+                val target = expression.returnTargetSymbol.owner
+                val array = (if (target is IrFunction) target.returnType else (target as? IrReturnableBlock)?.type)?.arrayStorageOrNull()
+                if (array != null) expression.value = retypeCreation(expression.value, array)
+                return expression
+            }
+
             override fun visitTypeOperator(expression: IrTypeOperatorCall): IrExpression {
                 expression.transformChildrenVoid(this)
                 if (expression.typeOperand.primitiveArrayOrNull() != null) {
                     // Implicit casts between the same array types are fine; others are not mapped.
                     if (expression.operator != IrTypeOperator.IMPLICIT_CAST) throw Abort("type operator on a primitive Array")
                     expression.typeOperand = expression.typeOperand.mapped()
+                    expression.argument = retypeCreation(expression.argument, expression.typeOperand.classOrFail)
                 }
                 return expression
             }
@@ -361,6 +378,55 @@ internal class Monomorphization(private val context: Context, private val module
             override fun visitValueParameter(declaration: IrValueParameter) { declaration.type = declaration.type.mapped(); super.visitValueParameter(declaration) }
             override fun visitFunction(declaration: IrFunction) { declaration.returnType = declaration.returnType.mapped(); super.visitFunction(declaration) }
         })
+    }
+
+    /** `Array<P>(size)`: the primitive array's constructor of the same shape. */
+    private fun primitiveArrayConstructorCall(expression: IrConstructorCall, array: IrClassSymbol): IrExpression {
+        val constructor = array.owner.declarations.filterIsInstance<IrConstructor>()
+                .singleOrNull { it.parameters.size == expression.arguments.size && it.parameters.all { p -> p.type.isInt() } }
+                ?: throw Abort("array constructor")
+        return IrConstructorCallImpl.fromSymbolOwner(expression.startOffset, expression.endOffset, array.defaultType, constructor.symbol)
+                .also { for (i in expression.arguments.indices) it.arguments[i] = expression.arguments[i] }
+    }
+
+    /**
+     * An array created with an erased element type (`Array<E>(size)` in an inlined generic function such as
+     * `arrayOfUninitializedElements`) whose value becomes a primitive [array] (a field, variable or result mapped to it):
+     * it must allocate that primitive array, not an `Array` whose elements the GC would scan as references.
+     */
+    private fun retypeCreation(expression: IrExpression, array: IrClassSymbol): IrExpression {
+        when (expression) {
+            is IrConstructorCall ->
+                if (expression.symbol.owner.constructedClass.symbol == irBuiltIns.arrayClass) return primitiveArrayConstructorCall(expression, array)
+            is IrCall -> {
+                // Intrinsics returning their type argument (`createUninitializedArray<Array<E>>(size)`).
+                val callee = expression.symbol.owner
+                val returned = (callee.returnType as? IrSimpleType)?.classifier as? IrTypeParameterSymbol
+                if (returned != null && returned.owner.parent == callee &&
+                        (expression.typeArguments[returned.owner.index] as? IrSimpleType)?.classifier == irBuiltIns.arrayClass) {
+                    expression.typeArguments[returned.owner.index] = array.defaultType
+                    expression.type = array.defaultType
+                }
+            }
+            is IrTypeOperatorCall ->
+                if (expression.operator == IrTypeOperator.IMPLICIT_CAST) expression.argument = retypeCreation(expression.argument, array)
+            is IrReturnableBlock -> {
+                val block = expression
+                block.transformChildrenVoid(object : IrElementTransformerVoid() {
+                    override fun visitReturn(expression: IrReturn): IrExpression {
+                        expression.transformChildrenVoid(this)
+                        if (expression.returnTargetSymbol == block.symbol) expression.value = retypeCreation(expression.value, array)
+                        return expression
+                    }
+                })
+            }
+            is IrContainerExpression -> {
+                val last = expression.statements.lastOrNull() as? IrExpression
+                if (last != null) expression.statements[expression.statements.lastIndex] = retypeCreation(last, array)
+            }
+            else -> {}
+        }
+        return expression
     }
 
     // Whether [function] is in a copy made by this pass (or being made), whose array types are mapped.
