@@ -208,10 +208,14 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
         ParallelProcessor::Worker worker(*parallelProcessor_);
         // Helpers register their own workers and take batches the GC thread shares while it collects roots and marks.
         // A helper that arrives after the mark has terminated just finds no work.
-        startHelpers([this, gcHandle] {
+        auto helper = [this, gcHandle] {
             ParallelProcessor::Worker helperWorker(*parallelProcessor_);
             Mark<MarkTraits>(gcHandle, helperWorker);
-        });
+        };
+        // Kore: with evacuation, every root is marked (in place) before any slot is traced: the helpers start after them,
+        // and the stack candidates are looked up first.
+        bool evacuating = internal::isEvacuating();
+        if (!evacuating) startHelpers(helper);
         // As `collectRootSet`, but the conservative stack candidates of all threads are looked up with the remembered
         // set's slots.
         MarkTraits::clear(worker);
@@ -221,7 +225,12 @@ void gc::mark::ConcurrentMark::markYoungInSTW(
             collectRootSetForThread<MarkTraits>(gcHandle, worker, thread, &stackCandidates);
         }
         collectRootSetGlobals<MarkTraits>(gcHandle, worker);
+        if (evacuating) {
+            collectConservativeStackRoots<MarkTraits>(worker, stackCandidates);
+            stackCandidates.clear();
+        }
         gc::pausePhase("roots");
+        if (evacuating) startHelpers(helper);
         markRememberedSets(worker, stackCandidates);
         gc::pausePhase("remembered");
         Mark<MarkTraits>(gcHandle, worker);

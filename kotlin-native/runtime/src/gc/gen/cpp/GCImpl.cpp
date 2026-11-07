@@ -41,6 +41,7 @@ extern size_t gLastHeapRanges;
 } // namespace kotlin::alloc
 
 std::atomic<bool> gc::internal::youngCollection = false;
+std::atomic<bool> gc::internal::evacuating = false;
 std::atomic<size_t> gc::internal::markArraySlicesPending = 0;
 
 namespace {
@@ -228,6 +229,80 @@ std::atomic<bool> gSliceArraysInMark = false;
 const std::vector<ObjHeader*>* gRememberedHolders = nullptr;
 constexpr uint32_t kRememberedHoldersPerSlice = 64;
 
+// Kore: evacuation (docs/kore/gc-redesign.md, phase 5). A young object reached through a slot of a heap object (a field,
+// an array element, a remembered slot) is copied out of its Immix block, and the slot updated, unless it may not move:
+// pinned (an identity hash code, a stable reference), with extra object data, outside Immix blocks, or marked in place
+// already (the roots, including everything the stacks may point to, are marked before any slot is traced). The
+// original's header becomes the copy's address with tag 2; the sweep frees it.
+constexpr uintptr_t kForwardedTag = 2;
+[[clang::no_destroy]] std::mutex gEvacuationAllocationMutex;
+
+ALWAYS_INLINE uintptr_t headerWord(const ObjHeader* object) noexcept {
+    return __atomic_load_n(reinterpret_cast<const uintptr_t*>(object), __ATOMIC_ACQUIRE);
+}
+
+// The object `value` refers to, marked (in place) or copied: the address its slots must hold from now on.
+// Marks `value` in place, from its header `header` as last read: a compare-and-swap, as another worker may copy it
+// meanwhile. Returns the address its slots must hold.
+ObjHeader* markInPlace(MarkTraits::MarkQueue& queue, ObjHeader* value, uintptr_t header) noexcept {
+    auto* word = reinterpret_cast<uintptr_t*>(value);
+    while (true) {
+        if ((header & OBJECT_TAG_MASK) == kForwardedTag) return reinterpret_cast<ObjHeader*>(header & ~uintptr_t(7));
+        if ((header & (gc::ObjectBits::kOld | gc::ObjectBits::kMarked)) != 0) return value;
+        if (__atomic_compare_exchange_n(word, &header, header | gc::ObjectBits::kMarked, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
+    }
+    // As `MarkTraits::tryEnqueue`: objects without references or extra object data need no tracing.
+    auto* typeInfo = ObjHeader::untagged(reinterpret_cast<TypeInfo*>(header));
+    if (typeInfo->typeInfo_ != typeInfo || typeInfo->processObjectInMark != Kotlin_processEmptyObjectInMark) queue.tryPush(*value);
+    return value;
+}
+
+// The object `value` refers to, marked (in place) or copied: the address its slots must hold from now on.
+NO_INLINE ObjHeader* evacuateOrMark(MarkTraits::MarkQueue& queue, ObjHeader* value) noexcept {
+    uintptr_t header = headerWord(value);
+    uintptr_t tag = header & OBJECT_TAG_MASK;
+    if (tag == kForwardedTag) return reinterpret_cast<ObjHeader*>(header & ~uintptr_t(7));
+    if (tag != OBJECT_TAG_HEAP) return value;
+    // Old objects stay (a young collection does not trace them), marked ones were reached first.
+    if ((header & (gc::ObjectBits::kOld | gc::ObjectBits::kMarked)) != 0) return value;
+    // Extra object data (the header points to a meta object, whose first field is the type info) keeps it in place.
+    auto* typeInfoOrMeta = ObjHeader::untagged(reinterpret_cast<TypeInfo*>(header));
+    if (typeInfoOrMeta->typeInfo_ != typeInfoOrMeta) return markInPlace(queue, value, header);
+    // The size from the type info read here (the header may change meanwhile; an array's length does not).
+    const TypeInfo* typeInfo = typeInfoOrMeta;
+    size_t bytes = typeInfo->IsArray()
+            ? AlignUp<size_t>(AlignUp<size_t>(sizeof(ArrayHeader), -typeInfo->instanceSize_) +
+                              static_cast<size_t>(-typeInfo->instanceSize_) * value->array()->count_, kObjectAlignment)
+            : AlignUp<size_t>(typeInfo->instanceSize_, kObjectAlignment);
+    if (!alloc::canEvacuate(value, bytes)) return markInPlace(queue, value, header);
+    uint8_t* memory;
+    {
+        std::unique_lock guard(gEvacuationAllocationMutex);
+        memory = mm::GlobalData::Instance().allocator().allocateForEvacuation(bytes);
+    }
+    if (memory == nullptr) return markInPlace(queue, value, header);
+    std::memcpy(memory, value, bytes);
+    auto* copy = reinterpret_cast<ObjHeader*>(memory);
+    // The copy's header as read (the memory copy may have seen a later one).
+    *reinterpret_cast<uintptr_t*>(copy) = header;
+    uintptr_t desired = reinterpret_cast<uintptr_t>(copy) | kForwardedTag;
+    if (!__atomic_compare_exchange_n(reinterpret_cast<uintptr_t*>(value), &header, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        // Another worker marked or copied it meanwhile; this copy, never marked, is swept.
+        if ((header & OBJECT_TAG_MASK) == kForwardedTag) return reinterpret_cast<ObjHeader*>(header & ~uintptr_t(7));
+        return value;
+    }
+    return markInPlace(queue, copy, header);
+}
+
+// Traces the slot behind `accessor` (evacuating).
+template <typename Accessor>
+ALWAYS_INLINE void evacuateSlot(MarkTraits::MarkQueue& queue, Accessor accessor) noexcept {
+    ObjHeader* value = accessor.direct();
+    if (value == nullptr) return;
+    ObjHeader* moved = evacuateOrMark(queue, value);
+    if (moved != value) accessor.direct().store(moved);
+}
+
 void rescanRememberedHolder(MarkTraits::MarkQueue& markQueue, ObjHeader* holder) noexcept {
     gc::objectBits(holder).forget();
     MarkTraits::processInMark(markQueue, holder);
@@ -248,6 +323,10 @@ void markArraySlice(void* state, ArrayHeader* array, uint32_t begin, uint32_t en
     }
     HeapRefSlot slots = ArrayAddressOfElementAt(array, 0);
     bool recordSlots = recordingNurserySlots();
+    if (gc::internal::isEvacuating()) {
+        for (uint32_t i = begin; i < end; ++i) evacuateSlot(markQueue, mm::RefFieldAccessor(slots + i));
+        return;
+    }
     for (uint32_t i = begin; i < end; ++i) {
         if (recordSlots) recordIfMovable(static_cast<ObjHeader**>((slots + i).address()));
         ObjHeader* element = mm::RefFieldAccessor(slots + i).direct();
@@ -744,7 +823,10 @@ void gc::internal::GenerationalGC::markRememberedSet(
         }
         if (!gc::objectBits(owner).old()) return;
         ObjHeader* value = HeapRefSlot(slot).loadAtomic(std::memory_order_relaxed);
-        if (value != nullptr && value->heap()) {
+        if (value != nullptr && gc::internal::isEvacuating()) {
+            ObjHeader* moved = evacuateOrMark(markQueue, value);
+            if (moved != value) HeapRefSlot(slot).storeAtomic(moved, std::memory_order_relaxed);
+        } else if (value != nullptr && value->heap()) {
             MarkTraits::tryEnqueue(markQueue, value);
         }
         if (recordingNurserySlots()) recordIfMovable(slot);
@@ -812,7 +894,12 @@ void gc::internal::GenerationalGC::performYoungCollection(GCHandle gcHandle) noe
                                   std::vector<ObjHeader**>& stackCandidates) {
         markRememberedSet(worker, rememberedSet, stackCandidates);
     };
+    // Kore: evacuation (see `evacuateOrMark`), not with the nursery.
+    bool evacuate = compiler::immixEvacuation() && !nursery;
+    gc::internal::evacuating.store(evacuate, std::memory_order_relaxed);
     mark_.markYoungInSTW(gcHandle, markRememberedSets);
+    gc::internal::evacuating.store(false, std::memory_order_relaxed);
+    if (evacuate) allocator_.finishEvacuation();
     gSliceArraysInMark.store(false, std::memory_order_relaxed);
     RuntimeAssert(gMarkArraySlices.empty(), "Array slices left after the mark");
     uint64_t markEnd = konan::getTimeMicros();
@@ -976,6 +1063,11 @@ PERFORMANCE_INLINE void gc::GC::processObjectInMark(void* state, ObjHeader* obje
     if (__builtin_expect(recordingNurserySlots(), false)) {
         traverseClassObjectFields(object, [](auto accessor) noexcept { recordIfMovable(static_cast<ObjHeader**>(accessor.direct().address())); });
     }
+    if (__builtin_expect(gc::internal::isEvacuating(), false)) {
+        auto& queue = *static_cast<MarkTraits::MarkQueue*>(state);
+        traverseClassObjectFields(object, [&queue](auto accessor) noexcept { evacuateSlot(queue, accessor); });
+        return;
+    }
     gc::internal::processObjectInMark<MarkTraits>(state, object);
 }
 
@@ -1005,6 +1097,11 @@ PERFORMANCE_INLINE void gc::GC::processArrayInMark(void* state, ArrayHeader* arr
     }
     if (__builtin_expect(recordingNurserySlots(), false)) {
         traverseArrayOfObjectsElements(array, [](auto accessor) noexcept { recordIfMovable(static_cast<ObjHeader**>(accessor.direct().address())); });
+    }
+    if (__builtin_expect(gc::internal::isEvacuating(), false)) {
+        auto& queue = *static_cast<MarkTraits::MarkQueue*>(state);
+        traverseArrayOfObjectsElements(array, [&queue](auto accessor) noexcept { evacuateSlot(queue, accessor); });
+        return;
     }
     gc::internal::processArrayInMark<MarkTraits>(state, array);
 }

@@ -23,6 +23,12 @@ void alloc::initObjectPool() noexcept {}
 
 void alloc::initCompressedRefsBase() noexcept {}
 
+void alloc::pinObject(const ObjHeader*) noexcept {}
+
+bool alloc::canEvacuate(const ObjHeader*, size_t) noexcept {
+    return false;
+}
+
 void* alloc::allocateInObjectPool(size_t size) noexcept {
     // TODO: Check that alignment to kObjectAlignment is satisfied.
     void* result = ::calloc(1, size);

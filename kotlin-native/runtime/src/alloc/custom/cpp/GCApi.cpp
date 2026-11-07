@@ -44,6 +44,13 @@ std::atomic<size_t> allocatedBytesCounter;
 
 bool kotlin::alloc::ObjectSweepTraits::trySweepElement(uint8_t* object, FinalizerQueue& finalizerQueue, ObjectSweepTraits::GCSweepScope& gcHandle) noexcept {
     auto* heapObject = reinterpret_cast<CustomHeapObject*>(object);
+    // Kore: evacuation (docs/kore/gc-redesign.md, phase 5): the header of an object copied elsewhere is the copy's address
+    // with tag 2. The original is garbage.
+    if (compiler::immixEvacuation() &&
+        (__atomic_load_n(reinterpret_cast<uintptr_t*>(heapObject->object()), __ATOMIC_RELAXED) & OBJECT_TAG_MASK) == 2) {
+        gcHandle.addSweptObject();
+        return true;
+    }
     auto size = CustomAllocator::GetAllocatedHeapSize(heapObject->object());
     if (gc::tryResetMark(heapObject->heapHeader())) {
         CustomAllocDebug("SweepObject(%p): still alive", heapObject);

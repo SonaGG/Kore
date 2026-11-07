@@ -134,6 +134,10 @@ namespace internal {
 // finishes. A young collection neither marks old objects nor frees them.
 extern std::atomic<bool> youngCollection;
 inline bool isYoungCollection() noexcept { return youngCollection.load(std::memory_order_relaxed); }
+// Kore: evacuation (docs/kore/gc-redesign.md, phase 5): the young collection in progress copies young objects reached
+// through slots of heap objects out of their Immix blocks. Set by the GC thread before marking.
+extern std::atomic<bool> evacuating;
+inline bool isEvacuating() noexcept { return evacuating.load(std::memory_order_relaxed); }
 // Kore: the number of slices of big arrays waiting to be marked (see `GC::processArrayInMark`).
 extern std::atomic<size_t> markArraySlicesPending;
 // Kore: whether heap objects have a `GC::ObjectData` word before them.

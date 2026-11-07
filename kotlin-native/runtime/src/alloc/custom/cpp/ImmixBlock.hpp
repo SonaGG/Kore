@@ -62,6 +62,18 @@ public:
         return (starts_[granule / 64] & (uint64_t(1) << (granule % 64))) != 0;
     }
 
+    // Kore: evacuation (docs/kore/gc-redesign.md, phase 5). A pinned object never moves: its address was observed (an
+    // identity hash code, a stable reference). Cleared when the object dies.
+    void Pin(const void* address) noexcept {
+        size_t granule = (reinterpret_cast<uintptr_t>(address) & (kBlockSize - 1)) / kGranule;
+        uint64_t bit = uint64_t(1) << (granule % 64);
+        if ((__atomic_load_n(&pins_[granule / 64], __ATOMIC_RELAXED) & bit) == 0) __atomic_fetch_or(&pins_[granule / 64], bit, __ATOMIC_RELAXED);
+    }
+    bool IsPinned(const void* address) const noexcept {
+        size_t granule = (reinterpret_cast<uintptr_t>(address) & (kBlockSize - 1)) / kGranule;
+        return (__atomic_load_n(&pins_[granule / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (granule % 64))) != 0;
+    }
+
     // The closest object start at or before `address` (in this block), or null. The object need not contain `address`.
     uint8_t* StartAtOrBefore(const void* address) noexcept;
 
@@ -75,6 +87,11 @@ public:
         end = reinterpret_cast<uint8_t*>(this) + line * kLineSize;
         return true;
     }
+
+    // Kore: evacuation. The block was recycled (taken with old objects in it) since the last collection: its young
+    // objects fill holes between old ones, and are worth moving out (see `alloc::canEvacuate`).
+    bool Recycled() const noexcept { return recycled_; }
+    void SetRecycled(bool recycled) noexcept { recycled_ = recycled; }
 
     // Whether the free memory of the block is known to be zeroed (the block was never allocated into).
     bool Zeroed() const noexcept { return zeroed_; }
@@ -105,6 +122,7 @@ public:
                 uint8_t* element = base + offset;
                 if (SweepTraits::trySweepElement(element, finalizerQueue, sweepHandle)) {
                     bits &= ~(uint64_t(1) << bit);
+                    if ((pins_[word] & (uint64_t(1) << bit)) != 0) __atomic_fetch_and(&pins_[word], ~(uint64_t(1) << bit), __ATOMIC_RELAXED);
                     continue;
                 }
                 size_t bytes = SweepTraits::elementSize(element).inBytes();
@@ -145,8 +163,10 @@ private:
     size_t recordedBytes_ = 0;
     uint32_t freeLines_ = 0;
     bool zeroed_ = true;
+    bool recycled_ = false;
     uint8_t lines_[kLineCount];
     uint64_t starts_[kStartWords];
+    uint64_t pins_[kStartWords]; // Kore: see `Pin`.
 };
 
 static_assert(ImmixBlock::kMaxObjectBytes < ImmixBlock::kBlockSize / 2, "Medium objects must fit an empty block");

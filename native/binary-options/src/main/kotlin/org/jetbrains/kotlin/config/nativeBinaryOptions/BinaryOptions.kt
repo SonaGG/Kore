@@ -83,6 +83,11 @@ object BinaryOptions : BinaryOptionRegistry() {
     // half is otherwise zero), making the header 4 bytes in effect (default: on with zero-based compressed references).
     val compactHeaders by booleanOption()
 
+    // Kore: young collections copy the survivors out of Immix blocks (opportunistic evacuation, docs/kore/gc-redesign.md
+    // phase 5); objects referenced from the stacks, roots, meta data or identity hash codes stay in place. gc=gen with
+    // Immix and no GC word only.
+    val immixEvacuation by booleanOption()
+
     // Kore: find stack roots by scanning the stacks conservatively instead of keeping a shadow stack of frames.
     val conservativeStacks by booleanOption()
 

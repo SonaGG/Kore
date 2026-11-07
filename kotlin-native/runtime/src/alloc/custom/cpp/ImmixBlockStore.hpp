@@ -72,6 +72,7 @@ public:
     ImmixBlock* TakeBlock() noexcept {
         ImmixBlock* block = recyclable_.Pop();
         if (block == nullptr) return TakeFreeBlock();
+        block->SetRecycled(true);
         used_.Push(block);
         return block;
     }
@@ -85,6 +86,7 @@ public:
             block = TakeDecommittedBlock();
             if (block == nullptr) block = NewBlock();
         }
+        block->SetRecycled(false);
         used_.Push(block);
         return block;
     }

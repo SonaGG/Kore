@@ -44,6 +44,7 @@ OBJ_GETTER(mm::createRegularWeakReferenceImpl, ObjHeader* object) noexcept {
     auto* weakRef = makeRegularWeakReferenceImpl(object, object, holder.slot());
     // Kore: the extra object data refers to it directly, so it must not move.
     if (alloc::nursery::movable(weakRef)) alloc::nursery::pin(weakRef);
+    if (compiler::immixEvacuation()) alloc::pinObject(weakRef);
     auto* setWeakRef = extraObject.GetOrSetRegularWeakReferenceImpl(object, weakRef);
     // Kore: the link from `object` (via its ExtraObjectData) to the weak reference implementation is traced by the GC
     // but written without a heap reference barrier; report it so generational GCs see the old->young edge.

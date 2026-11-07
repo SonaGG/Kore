@@ -98,6 +98,12 @@ void initObjectPool() noexcept;
 
 // Kore: compressed references (docs/kore/gc-redesign.md, phase 3): reserves the heap, which sets `Kotlin_heapBase`.
 void initCompressedRefsBase() noexcept;
+
+// Kore: evacuation (docs/kore/gc-redesign.md, phase 5). Keeps `object` in place: its address was observed. A no-op
+// without evacuation, and for objects that never move anyway.
+void pinObject(const ObjHeader* object) noexcept;
+// Whether the heap object `object` of `bytes` bytes may be moved: it lies in an Immix block, and is not pinned.
+bool canEvacuate(const ObjHeader* object, size_t bytes) noexcept;
 // Instruct the allocator to free unused resources.
 void compactObjectPoolInCurrentThread() noexcept;
 

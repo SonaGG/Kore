@@ -8,6 +8,7 @@
 #include <atomic>
 #include <optional>
 
+#include "Allocator.hpp"
 #include "CompilerConstants.hpp"
 #include "ExternalRCRefRegistry.hpp"
 #include "GC.hpp"
@@ -73,6 +74,8 @@ mm::ExternalRCRefImpl::ExternalRCRefImpl(mm::ExternalRCRefRegistry& registry, KR
     RuntimeAssert(rc >= 0, "Creating ExternalRCRefImpl with negative rc %d", rc);
     // Runtime tests occasionally use sentinel values under 8 for opaque objects
     RuntimeAssert(reinterpret_cast<uintptr_t>(obj) < 8u || !obj->stack(), "Creating ExternalRCRefImpl to a stack-allocated object %p", obj);
+    // Kore: the reference holds the address (evacuation must not move the object).
+    if (compiler::immixEvacuation() && reinterpret_cast<uintptr_t>(obj) >= 8u) alloc::pinObject(obj);
 
     if (rc > 0) {
         registry.insertIntoRootsHead(*this);

@@ -48,6 +48,8 @@ KInt Kotlin_Any_hashCode(KConstRef thiz) {
   // if moving collector will be used.
   // Kore: with the moving young generation, an object whose identity hash code is taken stays in place.
   if (__builtin_expect(kotlin::alloc::nursery::movable(thiz), false)) kotlin::alloc::nursery::pin(thiz);
+  // Kore: so does it with evacuation.
+  if (kotlin::compiler::immixEvacuation()) kotlin::alloc::pinObject(thiz);
   return reinterpret_cast<uintptr_t>(thiz);
 }
 

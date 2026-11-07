@@ -173,3 +173,25 @@ Defaults change only when a phase is no slower on any benchmark beyond noise and
   phase 5 collector, kept as an option.
 - The 32 GiB reservation can fail under address-space limits. Then fall back to smaller reservations, and as a last
   resort to uncompressed references (a different binary).
+
+## Phase 5 results: evacuation (implemented, opt-in)
+
+`-Xbinary=immixEvacuation=true`: young collections copy young objects out of recycled Immix blocks (blocks that held old
+objects when allocation resumed in their holes), as Immix's opportunistic defragmentation does.
+
+- The roots, including every object the stacks may point to, are marked in place before any slot is traced (the GC
+  helpers start after them). Objects reached through slots of heap objects (fields, array elements, remembered holders
+  and slots) are then copied, the slot updated, and the original's header replaced by the copy's address with tag 2.
+- Objects whose address was observed never move: pinned (identity hash codes, stable references, weak reference
+  implementations; a pin bit per 8 bytes in each block), or with extra object data.
+- Copying and in-place marking race between GC workers on the header word, by compare-and-swap. The sweep frees
+  forwarded originals, and slot lookups skip them.
+
+Results (mingw_x64, compressed references and compact headers on): copying every young survivor (a copying nursery in
+effect) made pointer-heavy microbenchmarks up to 2.4x slower (the copies of parallel workers interleave, and the
+survivors of allocation-heavy code are copied for nothing); copying only out of recycled blocks is neutral on the game
+benchmark and the Compose cold run (peak 90-96 MiB against 84-93 MiB, first composition 125 ms against 121 ms) and up
+to 15% slower on virtual calls over a freshly built array. The non-moving sticky Immix stays the default: with compact
+objects and line-level reuse, fragmentation does not cost these workloads enough for copying to pay off. Evacuation
+would pay off in heaps fragmented over long runs; worth revisiting with per-worker copy allocators and block selection
+from the previous collection's line statistics.

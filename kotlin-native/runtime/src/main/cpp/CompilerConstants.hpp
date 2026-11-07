@@ -36,6 +36,7 @@ extern "C" const int32_t Kotlin_immix; // Kore
 extern "C" const int32_t Kotlin_compressedRefs; // Kore
 extern "C" const int32_t Kotlin_compressedRefsZeroBased; // Kore
 extern "C" const int32_t Kotlin_compactHeaders; // Kore
+extern "C" const int32_t Kotlin_immixEvacuation; // Kore
 extern "C" const int32_t Kotlin_gcWord; // Kore
 extern "C" const int32_t Kotlin_pagedAllocator;
 
@@ -118,6 +119,11 @@ ALWAYS_INLINE inline bool compressedRefsZeroBased() noexcept {
 // bits) in its low half, and the first 4-byte field of the object in its high half (docs/kore/compressed-refs.md).
 ALWAYS_INLINE inline bool compactHeaders() noexcept {
     return Kotlin_compactHeaders != 0;
+}
+
+// Kore: young collections copy survivors out of Immix blocks (docs/kore/gc-redesign.md, phase 5).
+ALWAYS_INLINE inline bool immixEvacuation() noexcept {
+    return Kotlin_immixEvacuation != 0;
 }
 
 // Kore: small and medium objects live in Immix blocks (alloc/custom ImmixBlock.hpp).

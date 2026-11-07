@@ -278,6 +278,10 @@ class NativeSecondStageCompilationConfig(
     val compactHeaders: Boolean
         get() = compressedRefsZeroBased && (configuration.get(BinaryOptions.compactHeaders) ?: true)
 
+    // Kore: copying young survivors out of Immix blocks (see `BinaryOptions.immixEvacuation`).
+    val immixEvacuation: Boolean
+        get() = (configuration.get(BinaryOptions.immixEvacuation) ?: false) && gcWordSupportedOff && !gcWord
+
     private val compressedRefsSupported: Boolean
         get() = gc == GC.GENERATIONAL_MARK_AND_SWEEP && allocationMode == AllocationMode.CUSTOM && immix && gcNurserySize == 0u &&
                 target.architecture == Architecture.X64 &&

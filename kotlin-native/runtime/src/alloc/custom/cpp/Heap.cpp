@@ -90,6 +90,9 @@ void Heap::ForEachHeapSlot(
         if (block == nullptr) continue;
         auto* object = reinterpret_cast<CustomHeapObject*>(block)->object();
         if (object->typeInfoOrMetaUntagged() == nullptr) continue;
+        // Kore: an object copied elsewhere by evacuation (tag 2): its slots are dead, the copy's are traced.
+        if (compiler::immixEvacuation() &&
+            (__atomic_load_n(reinterpret_cast<uintptr_t*>(object), __ATOMIC_RELAXED) & OBJECT_TAG_MASK) == 2) continue;
         if (address >= block + ObjectSweepTraits::elementSize(block).inBytes()) continue;
         process(slot, object);
     }

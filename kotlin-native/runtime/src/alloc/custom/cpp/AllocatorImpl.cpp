@@ -269,3 +269,17 @@ bool alloc::nursery::inFreeBlock(const void* address) noexcept {
     return nursery != nullptr && nursery->contains(address) &&
             nursery->state(nursery->blockOf(address)) == Nursery::BlockState::kFree;
 }
+
+void alloc::pinObject(const ObjHeader* object) noexcept {
+    if (!compiler::immixEvacuation() || object == nullptr || !object->heap()) return;
+    if (CustomAllocator::GetAllocatedHeapSize(const_cast<ObjHeader*>(object)) > ImmixBlock::kMaxObjectBytes) return;
+    ImmixBlock::Of(object)->Pin(object);
+}
+
+bool alloc::canEvacuate(const ObjHeader* object, size_t bytes) noexcept {
+    if (bytes > ImmixBlock::kMaxObjectBytes) return false;
+    // Only out of recycled blocks (opportunistic, as in Immix): objects in fresh blocks are contiguous already, and
+    // copying every survivor costs more than it saves.
+    auto* block = ImmixBlock::Of(object);
+    return block->Recycled() && !block->IsPinned(object);
+}
