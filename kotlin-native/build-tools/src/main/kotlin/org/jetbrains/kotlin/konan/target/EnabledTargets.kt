@@ -5,9 +5,12 @@
 
 package org.jetbrains.kotlin.konan.target
 
-// Kore: the runtime needs 64-bit pointers (compressed references, the heap reservation), so 32-bit targets are not built,
-// nor watchos_arm64 (arm64_32: 64-bit instructions, 32-bit pointers).
+// Kore: not built:
+// - 32-bit targets: the runtime needs 64-bit pointers (compressed references, the heap reservation);
+// - iOS, tvOS and watchOS: Kore targets desktops (and Linux and Android), and these would multiply the build time on macOS.
+private val koreExcludedFamilies = setOf(Family.IOS, Family.TVOS, Family.WATCHOS)
+
 fun enabledTargets(platformManager: PlatformManager) = platformManager.enabled.filterNot {
     (it in KonanTarget.deprecatedTargets && it !in KonanTarget.toleratedDeprecatedTargets) ||
-        it.architecture == Architecture.X86 || it.architecture == Architecture.ARM32 || it == KonanTarget.WATCHOS_ARM64
+        it.architecture == Architecture.X86 || it.architecture == Architecture.ARM32 || it.family in koreExcludedFamilies
 }
