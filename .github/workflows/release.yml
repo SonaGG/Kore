@@ -1,0 +1,82 @@
+name: Release
+
+# Builds the Kore bundles on every supported host and publishes them to the Kore Maven repository as
+# gg.sona.kore:kore-native[-prebuilt]:<version>:<os-arch>. Runs for `v<version>` tags, or by hand with a version.
+#
+# Repository secrets: KORE_MAVEN_USERNAME and KORE_MAVEN_PASSWORD.
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Kore version to publish (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KORE_VERSION: ${{ inputs.version || github.ref_name }}
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-14
+            platform: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the bundles
+        shell: bash
+        run: ./gradlew :kotlin-native:bundle -Pkore.version="${KORE_VERSION#v}" --no-configuration-cache
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.platform }}
+          path: |
+            kotlin-native/kotlin-native-*.zip
+            kotlin-native/kotlin-native-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundles-*
+          path: bundles
+          merge-multiple: true
+      - name: Publish
+        shell: bash
+        env:
+          ORG_GRADLE_PROJECT_koreMavenUsername: ${{ secrets.KORE_MAVEN_USERNAME }}
+          ORG_GRADLE_PROJECT_koreMavenPassword: ${{ secrets.KORE_MAVEN_PASSWORD }}
+        run: >-
+          ./gradlew :kotlin-native:publishKoreToMavenRepository
+          -Pkore.version="${KORE_VERSION#v}" -Pkore.bundles.dir="$PWD/bundles"

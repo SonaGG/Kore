@@ -1,0 +1,96 @@
+// Kore: publishes the distribution bundles to a Maven repository (`kore.maven.url`, by default Sona Interactive's).
+//
+//   ./gradlew :kotlin-native:publishKoreToMavenRepository -Pkore.version=<version>
+//
+// Coordinates: gg.sona.kore:kore-native[-prebuilt]:<kore.version>:<os-arch>@zip|tar.gz. The archives keep the upstream
+// layout, so an extracted bundle works as `kotlin.native.home`. Credentials come from the `koreMavenUsername` and
+// `koreMavenPassword` Gradle properties (for example `ORG_GRADLE_PROJECT_koreMavenUsername` in CI).
+
+def koreVersion = providers.gradleProperty("kore.version").get()
+def koreRepositoryUrl = providers.gradleProperty("kore.maven.url").orElse("https://maven.cloverclient.com/releases").get()
+def bundleExtension = project.ext.koreBundleExtension
+
+def configureKorePom = { MavenPublication mvn, String text ->
+    mvn.pom { MavenPom pom ->
+        pom.name.set(mvn.artifactId)
+        pom.description.set(text)
+        pom.url.set("https://github.com/SonaGG/Kore")
+        pom.licenses { MavenPomLicenseSpec licenses ->
+            licenses.license { MavenPomLicense license ->
+                license.name.set("The Apache License, Version 2.0")
+                license.url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+            }
+        }
+        pom.organization { MavenPomOrganization organization ->
+            organization.name.set("Sona Interactive, Inc.")
+        }
+        pom.scm { MavenPomScm scm ->
+            scm.url.set("https://github.com/SonaGG/Kore")
+            scm.connection.set("scm:git:https://github.com/SonaGG/Kore.git")
+        }
+    }
+}
+
+// With `-Pkore.bundles.dir=<dir>`, the bundles of every host found in <dir> (as the `bundleRegular`/`bundlePrebuilt`
+// tasks name them) are published instead of building this host's: CI builds each host's bundles, then publishes them
+// all at once, so each POM is uploaded only once.
+def bundlesDir = providers.gradleProperty("kore.bundles.dir").orNull
+def bundlePattern = ~/^kotlin-native(-prebuilt)?-((?:windows|linux|macos)-(?:x86_64|aarch64))-.+\.(zip|tar\.gz)$/
+
+def attachBundles = { MavenPublication mvn, boolean prebuilt, String taskName ->
+    if (bundlesDir == null) {
+        mvn.artifact(tasks.named(taskName)) {
+            classifier = project.ext.koreHostPlatformName
+            extension = bundleExtension
+        }
+        return
+    }
+    def found = file(bundlesDir).listFiles().findAll { it.isFile() }.sort { it.name }.findResults { File bundle ->
+        def match = bundle.name =~ bundlePattern
+        if (!match.matches() || (match.group(1) != null) != prebuilt) return null
+        mvn.artifact(bundle) {
+            classifier = match.group(2)
+            extension = match.group(3)
+        }
+        bundle
+    }
+    if (found.isEmpty()) throw new GradleException("No ${prebuilt ? 'prebuilt ' : ''}Kore bundles in $bundlesDir")
+}
+
+publishing {
+    publications {
+        register("KoreBundle", MavenPublication) { mvn ->
+            mvn.groupId = "gg.sona.kore"
+            mvn.artifactId = "kore-native"
+            mvn.version = koreVersion
+            attachBundles(mvn, false, "bundleRegular")
+            configureKorePom(mvn, "Kore native compiler distribution (platform libraries generated on first use)")
+        }
+        register("KoreBundlePrebuilt", MavenPublication) { mvn ->
+            mvn.groupId = "gg.sona.kore"
+            mvn.artifactId = "kore-native-prebuilt"
+            mvn.version = koreVersion
+            attachBundles(mvn, true, "bundlePrebuilt")
+            configureKorePom(mvn, "Kore native compiler distribution with prebuilt platform libraries")
+        }
+    }
+    repositories {
+        maven {
+            name = "koreMaven"
+            url = uri(koreRepositoryUrl)
+            if (url.scheme == "https" || url.scheme == "http") credentials(PasswordCredentials)
+        }
+    }
+}
+
+// Only the Kore publications go to the Kore Maven repository (not the upstream `org.jetbrains.kotlin` ones).
+tasks.withType(PublishToMavenRepository).configureEach {
+    def kore = publication.groupId == "gg.sona.kore"
+    onlyIf { kore || repository.name != "koreMaven" }
+}
+
+tasks.register("publishKoreToMavenRepository") {
+    group = "publishing"
+    description = "Publishes the Kore bundles for this host to the Kore Maven repository."
+    dependsOn("publishKoreBundlePublicationToKoreMavenRepository", "publishKoreBundlePrebuiltPublicationToKoreMavenRepository")
+}

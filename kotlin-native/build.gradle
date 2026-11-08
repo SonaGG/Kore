@@ -829,3 +829,8 @@ publishing {
         }
     }
 }
+
+// Kore: the Kore publications (see kore-publishing.gradle).
+ext.koreHostPlatformName = HostManager.platformName()
+ext.koreBundleExtension = PlatformInfo.isWindows() ? "zip" : "tar.gz"
+apply from: "kore-publishing.gradle"
