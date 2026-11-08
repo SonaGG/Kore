@@ -144,7 +144,8 @@ enabledTargets(platformManager).forEach { target ->
         }
         installTasks.add(klibInstallTask)
 
-        if (target.name in cacheableTargetNames) {
+        // Kore: mingw_x64 is cacheable for the stdlib only: the compiler does not use platform library caches on MinGW.
+        if (target.name in cacheableTargetNames && target.family != Family.MINGW) {
             for (withOptimizations in listOf(false, true)) {
                 val cacheTask = tasks.register(cacheTaskName(targetName, df.name, withOptimizations), KonanCacheTask::class.java) {
                     val dist = nativeDistribution

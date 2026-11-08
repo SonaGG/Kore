@@ -97,8 +97,6 @@ configurations {
 apply plugin: CompilationDatabasePlugin
 
 dependencies {
-    commonSources project(path: ':kotlin-stdlib', configuration: 'metadataSourcesElements')
-    commonSources project(path: ':kotlin-test', configuration: 'metadataSourcesElements')
     compilationDatabase project(":kotlin-native:Interop:Runtime")
     compilationDatabase project(":kotlin-native:libclangext")
     compilationDatabase project(":kotlin-native:libllvmext")
@@ -143,7 +141,6 @@ tasks.named("build") {
 }
 
 tasks.register("distNativeSources", Zip) {
-    dependsOn(configurations.commonSources)
     duplicatesStrategy = DuplicatesStrategy.FAIL
     destinationDirectory = nativeDistribution.map { it.sources }
     archiveFileName = nativeDistribution.map { it.stdlibSources.asFile.name }
@@ -151,10 +148,23 @@ tasks.register("distNativeSources", Zip) {
     includeEmptyDirs = false
     include('**/*.kt')
 
-    from {
-        configurations.commonSources
-                .collect { zipTree(it) }
-                .inject { t1, t2 -> t1 + t2 }
+    // Kore: the common stdlib and kotlin-test sources come from the source trees directly (`:kotlin-stdlib` and
+    // `:kotlin-test` are stub projects without their `metadataSourcesElements`), in the upstream layout.
+    def stdlibDir = project(":kotlin-stdlib").projectDir
+    def kotlinTestDir = project(":kotlin-test").projectDir
+    into('commonMain') {
+        from(new File(stdlibDir, 'common/src'))
+        from(project(":kotlin-stdlib").files('src').builtBy(':prepare:build.version:writeStdlibVersion'))
+        from(new File(stdlibDir, 'unsigned/src'))
+    }
+    into('commonNonJvmMain') {
+        from(new File(stdlibDir, 'common-non-jvm/src'))
+    }
+    into('annotationsCommonMain') {
+        from(new File(kotlinTestDir, 'annotations-common/src/main/kotlin'))
+    }
+    into('assertionsCommonMain') {
+        from(new File(kotlinTestDir, 'common/src/main/kotlin'))
     }
     into('nativeWasmMain') {
         from(project(":kotlin-stdlib").file('native-wasm/src/'))

@@ -17,13 +17,19 @@ using namespace kotlin;
 
 namespace {
 
+#if KONAN_LINUX
+// The membarrier commands (linux/membarrier.h, since Linux 4.14). Older sysroot headers lack them, and their values are fixed.
+constexpr int kMembarrierPrivateExpedited = 1 << 3;
+constexpr int kMembarrierRegisterPrivateExpedited = 1 << 4;
+#endif
+
 bool initProcessBarrier() noexcept {
 #if KONAN_WINDOWS
     return true;
 #elif KONAN_LINUX && defined(__NR_membarrier)
     int supported = static_cast<int>(syscall(__NR_membarrier, MEMBARRIER_CMD_QUERY, 0, 0));
-    if (supported < 0 || !(supported & MEMBARRIER_CMD_PRIVATE_EXPEDITED)) return false;
-    return syscall(__NR_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0, 0) == 0;
+    if (supported < 0 || !(supported & kMembarrierPrivateExpedited)) return false;
+    return syscall(__NR_membarrier, kMembarrierRegisterPrivateExpedited, 0, 0) == 0;
 #else
     return false;
 #endif
@@ -40,7 +46,7 @@ void mm::processWideBarrier() noexcept {
 #if KONAN_WINDOWS
     FlushProcessWriteBuffers();
 #elif KONAN_LINUX && defined(__NR_membarrier)
-    syscall(__NR_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED, 0, 0);
+    syscall(__NR_membarrier, kMembarrierPrivateExpedited, 0, 0);
 #endif
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }

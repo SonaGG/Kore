@@ -84,9 +84,9 @@ ImageRange imageRange() noexcept {
                 uintptr_t low = UINTPTR_MAX, high = 0;
                 for (int i = 0; i < phdr->dlpi_phnum; ++i) {
                     if (phdr->dlpi_phdr[i].p_type != PT_LOAD) continue;
-                    uintptr_t segmentStart = phdr->dlpi_addr + phdr->dlpi_phdr[i].p_vaddr;
+                    auto segmentStart = static_cast<uintptr_t>(phdr->dlpi_addr + phdr->dlpi_phdr[i].p_vaddr);
                     low = std::min(low, segmentStart);
-                    high = std::max(high, segmentStart + phdr->dlpi_phdr[i].p_memsz);
+                    high = std::max(high, static_cast<uintptr_t>(segmentStart + phdr->dlpi_phdr[i].p_memsz));
                 }
                 if (search->address < low || search->address >= high) return 0;
                 search->range = {low, high};
