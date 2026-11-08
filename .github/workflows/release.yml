@@ -1,7 +1,8 @@
 name: Release
 
 # Builds the Kore bundles on every supported host and publishes them to the Kore Maven repository as
-# gg.sona.kore:kore-native[-prebuilt]:<version>:<os-arch>. Runs for `v<version>` tags, or by hand with a version.
+# gg.sona.kore:kore-native[-prebuilt]:<version>:<os-arch>, with the `gg.sona.kore` Gradle plugin. Runs for
+# `v<version>` tags, or by hand with a version.
 #
 # Repository secrets: KORE_MAVEN_USERNAME and KORE_MAVEN_PASSWORD.
 
@@ -80,3 +81,9 @@ jobs:
         run: >-
           ./gradlew :kotlin-native:publishKoreToMavenRepository
           -Pkore.version="${KORE_VERSION#v}" -Pkore.bundles.dir="$PWD/bundles"
+      - name: Publish the Gradle plugin
+        shell: bash
+        env:
+          ORG_GRADLE_PROJECT_koreMavenUsername: ${{ secrets.KORE_MAVEN_USERNAME }}
+          ORG_GRADLE_PROJECT_koreMavenPassword: ${{ secrets.KORE_MAVEN_PASSWORD }}
+        run: ./gradlew -p gradle-plugin publish -Pkore.version="${KORE_VERSION#v}"
