@@ -12,12 +12,21 @@
 #include <cstdlib>
 #include <cstring>
 
+// As in GCApi.cpp: the bootstrap compiler does not define KONAN_APPLE yet.
+#ifndef KONAN_APPLE
+#define KONAN_APPLE (KONAN_OSX | KONAN_IOS | KONAN_TVOS | KONAN_WATCHOS)
+#endif
+
 #if KONAN_WINDOWS
 #include <windows.h>
 #else
 #include <dlfcn.h>
-#include <link.h>
 #include <sys/mman.h>
+#if KONAN_APPLE
+#include <mach-o/loader.h>
+#else
+#include <link.h>
+#endif
 #endif
 
 #include <vector>
@@ -71,6 +80,29 @@ ImageRange imageRange() noexcept {
     auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(start);
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(start + dos->e_lfanew);
     return {start, start + nt->OptionalHeader.SizeOfImage};
+#elif KONAN_APPLE
+    // The image's Mach-O header, then its segments (all but the unmapped __PAGEZERO), moved by the ASLR slide.
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void*>(&imageRange), &info) == 0 || info.dli_fbase == nullptr) return {0, 0};
+    auto* header = static_cast<const mach_header_64*>(info.dli_fbase);
+    auto* command = reinterpret_cast<const load_command*>(header + 1);
+    uintptr_t low = UINTPTR_MAX, high = 0;
+    intptr_t slide = 0;
+    for (uint32_t i = 0; i < header->ncmds; ++i) {
+        if (command->cmd == LC_SEGMENT_64) {
+            auto* segment = reinterpret_cast<const segment_command_64*>(command);
+            if (std::strcmp(segment->segname, SEG_PAGEZERO) != 0) {
+                if (segment->fileoff == 0 && segment->filesize != 0) {
+                    slide = reinterpret_cast<intptr_t>(header) - static_cast<intptr_t>(segment->vmaddr);
+                }
+                low = std::min(low, static_cast<uintptr_t>(segment->vmaddr));
+                high = std::max(high, static_cast<uintptr_t>(segment->vmaddr + segment->vmsize));
+            }
+        }
+        command = reinterpret_cast<const load_command*>(reinterpret_cast<const uint8_t*>(command) + command->cmdsize);
+    }
+    if (high == 0) return {0, 0};
+    return {low + slide, high + slide};
 #else
     Dl_info info{};
     dladdr(reinterpret_cast<void*>(&imageRange), &info);

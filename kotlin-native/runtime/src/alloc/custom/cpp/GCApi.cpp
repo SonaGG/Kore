@@ -164,7 +164,7 @@ static void* systemAlloc(uint64_t size) noexcept {
         memory = mmap(nullptr, size, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, -1, 0);
         error = memory == MAP_FAILED;
 #elif KONAN_APPLE
-        auto tag = compiler::mmapTag();
+        auto tag = kotlin::compiler::mmapTag();
         memory = mmap(nullptr, size, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, tag ? VM_MAKE_TAG(tag) : -1, 0);
         error = memory == MAP_FAILED;
 #else
